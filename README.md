@@ -2,15 +2,15 @@
 
 Protocol specification and design notes for zkICAO: zero-knowledge circuits and tooling for electronic identity documents. The first target is ICAO Doc 9303 (Machine Readable Travel Documents).
 
-Status: no specification document has been published yet. This repository currently holds only this README. The documents listed below are the intended contents, not existing material.
+Status: first version published. Every document below exists. They were drafted against the source and then reviewed against it again by a reader looking for statements the code does not support, which corrected 110 claims and surfaced two defects in the code itself.
 
 This repository is the reference for values shared across repositories: binding values, leaf formats, salt conventions and nullifier policies. Implementations elsewhere follow it rather than defining their own.
 
 Changing a shared value takes two steps, in this order: publish the revised specification here, then update the implementations against it, each referencing the specification commit it implements. A change that lands in an implementation before it is specified here has no reference to review against.
 
-## Planned documents
+## Documents
 
-| Document | Intended contents |
+| Document | Contents |
 |---|---|
 | architecture.md | circuit inventory, variant dimensions, verification models |
 | binding.md | cross-circuit binding values, packing per hash length, invariants |

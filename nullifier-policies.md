@@ -63,7 +63,7 @@ Non choosability also depends on one thing an auditor should verify against the 
 
 The cost is reissue. A replacement document carries a different signature, so it produces a different secret and a different nullifier. Whatever the policy says about which fields it uses, no value derived from this secret survives document replacement. `commit::document_secret` documents this, and it is why only the document number policy is built on it.
 
-There is also a size limit. `pack_pair` rejects components longer than 62 bytes, so `document_secret` as written covers the ECDSA curves the repository wraps (P-256, P-384, brainpoolP384r1) and cannot take an RSA signature. Only one Passive Authentication variant exists today, `bin/sod/ecdsa_p256_sha256_ec512`. `circuits/lib/rsa` implements PKCS#1 v1.5 with SHA-256 and is a workspace member, but no circuit depends on it, so what is missing for RSA is a circuit and a secret derivation, not the signature check. That derivation is a new specification, not a new caller.
+There is also a size limit. `pack_pair` rejects components longer than 62 bytes, so `document_secret` as written covers the ECDSA curves the repository wraps (P-256, P-384, brainpoolP384r1) and cannot take an RSA signature. RSA has both halves now: `bin/sod/rsa2048_v15_sha256_ec512` verifies the signature, and `commit::modulus_hash` and `commit::limbs_document_secret` fold a modulus and a signature given as limbs, so the key commitment and the document secret cover the whole of each.
 
 ## 5. Policy identifiers
 
@@ -102,7 +102,7 @@ nullifier_document_number  commitment  secret_binding  domain  context  return[0
 
 The policy identifier is not among them. The module comment in `circuits/lib/policy/src/lib.nr` says the identifier is a public input; that is not true of the shipped circuit. A verifier learns which policy it received from the verification key it accepted, and from nothing else. Either the circuit should publish the identifier or that comment should be corrected; until then, verification key selection is load bearing and must be treated as such.
 
-Measured with `nargo info` and recorded in the message of commit `60f7fef` in the circuits repository, `nullifier_document_number` is 56 ACIR opcodes, against 35096 for `sod_ecdsa_p256_sha256_ec512` in the same measurement. Neither has been re-measured for this document. The one commit since, `613231b`, added files only (the anchor library and circuit, quoted at 340 ACIR opcodes in its own message) and touched neither circuit named here. The nullifier is cheap; the document authentication it depends on is not.
+The nullifier is the cheapest circuit in the repository and the document authentication it depends on is the most expensive, by roughly three orders of magnitude. Opcode counts are in `architecture.md`, which is the only place they are recorded.
 
 ## 7. One domain, exactly one policy
 

@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | HEAD `14a081c`, last code change `6244f20` (2026-07-25) | 18 library packages, 11 circuits, 1 build probe |
+| zkICAO/circuits | HEAD `f07efc6` or later (2026-07-26) | 16 library packages, 11 circuits, 1 witness tool |
 | zkICAO/prover | `adc4dcc` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
@@ -157,9 +157,9 @@ What neither mode proves. Neither checks revocation. Neither checks issuer or su
 
 One pairing limit follows from the types. `x509::ec_public_key` is generic over the coordinate width and the chain anchor instantiates it at 32 bytes, so that mode reads an uncompressed elliptic curve point out of the certificate and commits to it through `pubkey_hash`. The RSA Passive Authentication variant derives its key hash with `modulus_hash` instead, and nothing in the chain mode can read an RSA subject key out of a certificate. There is therefore no combination today that chains an RSA Document Signer key to a country signing key, even though both halves exist. The inclusion mode carries the matching gap: it takes two 32 byte coordinate arrays, so a registry of RSA signer keys has no circuit to consume it, and `modulus_hash` is what such a registry would build leaves from.
 
-### 2.7 probe
+### 2.7 tools/mrz_opening
 
-`probe/` compiles against every pinned dependency so that a successful workspace compile proves the dependency graph resolves under the pin. It verifies nothing about the protocol and is not part of any proving flow.
+`tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. It is executed to solve a witness and never proved: a proof would publish exactly what the commitment exists to hide. It sits outside `bin/` so it is not mistaken for a circuit.
 
 ## 3. Why the signature check and the extraction are separate circuits
 
@@ -169,17 +169,17 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 
 | Circuit | ACIR opcodes |
 |---|---|
-| sod_ecdsa_p256_sha256_ec512 | 35096 |
-| sod_rsa2048_v15_sha256_ec512 | 8719 |
-| anchor_csca_chain_rsa2048_sha256_tbs512 | 6807 |
-| dg_extract_sha256_ec512 | 3299 |
-| attributes_mrz_td1_sha256 | 2447 |
-| attributes_mrz_td3_sha256 | 2101 |
+| sod_ecdsa_p256_sha256_ec512 | 35098 |
+| sod_rsa2048_v15_sha256_ec512 | 8100 |
+| anchor_csca_chain_rsa2048_sha256_tbs512 | 6841 |
+| dg_extract_sha256_ec512 | 3301 |
+| attributes_mrz_td1_sha256 | 2449 |
+| attributes_mrz_td3_sha256 | 2103 |
 | anchor_dsc_inclusion | 340 |
-| predicate_member | 228 |
-| predicate_compare | 121 |
-| predicate_reveal | 98 |
-| nullifier_document_number | 56 |
+| predicate_member | 230 |
+| predicate_compare | 123 |
+| predicate_reveal | 100 |
+| nullifier_document_number | 58 |
 
 Commit `8bfd6d1` recorded the same pair one change earlier, at the same 512 byte buffer: 35080 for the signature circuit and 3297 for the extraction. The extraction circuit re-hashes the same 512 byte buffer, which is what re-deriving `econtent_binding` costs instead of verifying the signature again.
 
@@ -286,7 +286,7 @@ The intended second model is to fold the bundle into one proof by recursive veri
 
 Signature algorithms. Two variants exist, ECDSA over P-256 and RSA-2048 with PKCS#1 v1.5 and exponent 65537. Nothing else can be proved. RSA-3072 and RSA-4096 have no variant, RSA-PSS has no implementation at all, and the public exponent is fixed at 65537 in the arithmetic, so a key that uses any other exponent cannot be proved. `lib/sig` exposes wrappers for P-384 and Brainpool P-384r1 that no circuit instantiates.
 
-Digest algorithms. `lib/hash` exposes SHA-256 and nothing else. SHA-1 appears only in the build probe. Documents whose CMS digest or data group hashes use any other algorithm are out of reach, and the variant naming has room for them but the packages do not exist.
+Digest algorithms. `lib/hash` exposes SHA-256 and nothing else. Documents whose CMS digest or data group hashes use any other algorithm are out of reach, and the variant naming has room for them but the packages do not exist.
 
 Document layouts. `lib/mrz` implements TD1 and TD3. Doc 9303 also defines TD2, which is not implemented. No profile exists for any data group other than DG1, so nothing reads a portrait, a state specific group such as DG13, or anything else, even though the extraction circuit will extract any data group number from 1 to 16.
 
@@ -296,7 +296,7 @@ Chip presence. Nothing here proves a document was read from a genuine live chip.
 
 Recursion and on-chain verification, as described in 6.2.
 
-Supporting code. `lib/tlv` implements DER length decoding with minimality checks, is a workspace member, and no package depends on it; the structure checks that ship are fixed offset byte comparisons in `lib/lds`, `lib/cms`, `lib/attributes` and `lib/x509`. `policy::assert_supported` and `normalize::pack_alpha3` are called only by their own unit tests. Witness preparation does not exist as code: `lib/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove; the noir_rs and Barretenberg pins in `TOOLCHAIN.md` are recorded as intended and are not exercised.
+Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/lds`, `lib/cms`, `lib/attributes` and `lib/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. `policy::assert_supported` and `normalize::pack_alpha3` are called only by their own unit tests. Witness preparation does not exist as code: `lib/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove; the noir_rs and Barretenberg pins in `TOOLCHAIN.md` are recorded as intended and are not exercised.
 
 Real documents. Every fixture in `lib/testdata` is generated by `fixtures/generator`, which builds synthetic Doc 9303 material over the specimen machine readable zones from the standard: DG1, a Security Object, CMS signed attributes, a signature under a generated Document Signer key, and a Document Signer certificate signed by a generated country signing key. No test in either repository runs against a document issued by a state.
 

@@ -12,7 +12,7 @@ Data a state defines for itself does not live in DG1. It lives in other data gro
 
 ## The DG1 container
 
-DG1 is the machine readable zone wrapped in two nested DER templates, `61 len` then `5F1F len`. `check_dg1_template` asserts the whole header explicitly rather than calling the general decoder in `lib/tlv`:
+DG1 is the machine readable zone wrapped in two nested DER templates, `61 len` then `5F1F len`. `check_dg1_template` asserts the whole header explicitly rather than decoding it generically:
 
 ```
 dg1_len <= N                          // N is the circuit buffer, 128 bytes
@@ -40,7 +40,7 @@ Only SHA-256 is implemented, in `lib/hash`. The circuit names carry the suffix `
 
 Identifiers are global constants in `lib/attributes` (`FIELD_DOCUMENT_CODE` through `FIELD_OPTIONAL_DATA`, and `FIELD_COUNT`). The predicate and nullifier layers do not import them: `lib/predicate` bounds the identifier to 1 through 16 with plain numbers, and `lib/nullifier` asserts `issuing_state.field_id == 2` and `document_number_field.field_id == 3` as literals. The numbering is a convention that has to hold in both places.
 
-The identifier is bound into the leaf by `commit::leaf` and is a public input to every predicate circuit (`prover/layout.manifest` lists `field_id` first for `predicate_compare`, `predicate_member` and `predicate_reveal`), which is what stops a proof about one field being presented as a proof about another. The leaf index in the sixteen leaf tree is `field_id - 1`, from `leaf_to_root16(value, opening.field_id - 1, opening.siblings)`.
+The identifier is bound into the leaf by `commit::leaf` and is a public input to every predicate circuit (`prover/layout.manifest` lists `field_id` first for `predicate_compare`, `predicate_member` and `predicate_reveal`), which is what stops a proof about one field being presented as a proof about another. The leaf index in the sixteen leaf tree is `field_id - 1`, from `walk_path(value, opening.field_id - 1, opening.siblings)`.
 
 | Id | Constant | TD3 committed length | TD1 committed length |
 | --- | --- | --- | --- |
@@ -176,6 +176,6 @@ Country specific data groups are opt-in enrichment on top of the machine readabl
 
 ## Measured sizes
 
-From the commit that added the circuits (`60f7fef`, measured with `nargo info`), ACIR opcode counts: `attributes_mrz_td3_sha256` 2101 and `attributes_mrz_td1_sha256` 2447. For comparison in the same measurement, `sod_ecdsa_p256_sha256_ec512` is 35096 and `dg_extract_sha256_ec512` is 3299. Re-running `nargo info` on the current tree reproduces all four numbers.
+The attribute circuits are the cheapest part of the chain after the predicates; Opcode counts are in `architecture.md`, which is the only place they are recorded.
 
 Nothing in the repository breaks those counts down by component, so the difference between the two profiles is not attributed here. The two layouts differ in that TD1 carries 90 characters against 88 and a 50 byte composite check digit input against 39.

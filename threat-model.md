@@ -238,7 +238,7 @@ Offsets must be correct. `digest_offset`, `oid_offset` and `dg_offset` are priva
 
 ### 6.3 On the proving toolchain
 
-`circuits/TOOLCHAIN.md` pins nargo 1.0.0-beta.19, Barretenberg 4.2.0-aztecnr-rc.2 and noir_rs v1.0.0-beta.19-4, and pins the Noir dependencies: sha256 v0.3.0, poseidon v0.2.6, bignum v0.9.2-1, bigcurve v0.13.2-1, ecdsa v0.3.0, sha1 v0.11. That file is out of date on one point: it states RSA is not implemented, which stopped being true at circuits commit `ee6387b`. `probe/` exists as a build canary that imports every pinned dependency; its header says it is "Never executed", and `TOOLCHAIN.md` adds that it "verifies nothing about the protocol and is not part of any proving flow".
+`circuits/TOOLCHAIN.md` pins nargo 1.0.0-beta.19, Barretenberg 4.2.0-aztecnr-rc.2 and noir_rs v1.0.0-beta.19-4, and pins the Noir dependencies: sha256 v0.3.0, poseidon v0.2.6, bignum v0.9.2-1, bigcurve v0.13.2-1 and ecdsa v0.3.0. A sha1 pin went with the build probe that was its only user, and the eleven circuits compiling under the pin is now what checks the dependency graph resolves.
 
 Trusting a proof means trusting the Noir compiler to lower the source in `circuits/lib` and `circuits/bin` into an equivalent constraint system, trusting those dependency implementations of SHA-256, Poseidon2, ECDSA and big integer arithmetic to be correct, and trusting Barretenberg's prover and verifier along with whatever setup its proving system requires. `verify_one` delegates the cryptographic check to `bb` rather than reimplementing verification, so the verifier inherits every assumption the prover carries.
 
@@ -252,7 +252,7 @@ The relying party issues a fresh, unpredictable `context` per exchange and rejec
 
 The measured numbers in the repository are all in commit messages.
 
-Commit `60f7fef` in the circuits repository records ACIR opcode counts measured with `nargo info`: `sod_ecdsa_p256_sha256_ec512` 35096, `dg_extract_sha256_ec512` 3299, `attributes_mrz_td1_sha256` 2447, `attributes_mrz_td3_sha256` 2101, `predicate_member` 228, `predicate_compare` 121, `predicate_reveal` 98, `nullifier_document_number` 56. Commit `613231b` records 340 opcodes for the anchor circuit at depth sixteen. Commit `ae0a9c8` records 8719 opcodes for `sod_rsa2048_v15_sha256_ec512` against 35096 for the elliptic curve variant, and explains the ordering: an RSA verification with a small exponent is seventeen modular multiplications, while an ECDSA verification pays for non native arithmetic throughout.
+RSA costs about a quarter of the elliptic curve variant, which inverts the usual assumption: an RSA verification with a small exponent is seventeen modular multiplications, while an ECDSA verification pays for non native arithmetic throughout. Opcode counts are in `architecture.md`, which is the only place they are recorded.
 
 Commit `c9a27c9` records, for the Passive Authentication circuit and on a machine its message does not name, proving in 1.9 s, a 16000 byte proof, 128 bytes of public inputs for four field elements, and a 3680 byte verification key. Those figures predate the current signature: at that commit the circuit returned two values and carried four public inputs, where it now returns three and carries five. Nothing in the repository re-measures them.
 

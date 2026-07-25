@@ -43,7 +43,7 @@ No tag is zero. The tags in use are 1 through 12, contiguous, each used by exact
 
 A Merkle node is untagged on purpose. Tagging it would buy nothing, because both of its inputs are already outputs of tagged hashes or of the same two input hash, and it would cost an extra field element at every level of every tree. What replaces the tag is arity. A path walk only ever calls the two input hash, and there is no tagged value in the library that is two wide, so no leaf, no seed, no commitment and no set entry can be presented to a verifier as an internal node, and no internal node can be presented as any of them. The invariant that keeps this true is that every tagged constructor stays at three inputs or more; adding a two input tagged value would break it.
 
-`root16(leaves)` folds sixteen leaves through four levels of the same two input hash. `leaf_to_root16(leaf_value, index, siblings)` walks the same four levels in reverse and asserts `index < 16`. `walk_path(leaf_value, index, siblings)` is the depth generic form; it asserts `D < 32` and `index < 2^D`, and it is used both for the sets a verifier publishes in `lib/predicate::member` and for the signer registry in `lib/anchor::prove_signer_is_trusted`. Both take one direction bit per level out of `index`, so a sibling cannot be applied on the wrong side, and a path proved from the wrong position produces a different root. `merkle_roundtrip_all_indices` in `lib/commit` checks `root16` and `leaf_to_root16` agree for all sixteen indices.
+`root16(leaves)` folds sixteen leaves through four levels of the same two input hash. `walk_path(leaf_value, index, siblings)` walks those levels in reverse, is generic over depth, and asserts `D < 32` and `index < 2^D`. It is used for the document tree in `lib/predicate::open`, for the sets a verifier publishes in `lib/predicate::member`, and for the signer registry in `lib/anchor::prove_signer_is_trusted`. A separate `leaf_to_root16` was a hand unrolled copy of `walk_path` at depth four and was removed once a test showed the two agreed for every index. Both take one direction bit per level out of `index`, so a sibling cannot be applied on the wrong side, and a path proved from the wrong position produces a different root. `merkle_roundtrip_all_indices` in `lib/commit` checks `root16` and `walk_path` agree for all sixteen indices.
 
 ## 4. The domain rule
 
@@ -154,7 +154,7 @@ One committed field. `field_id` is in `1..=16` and fixes the leaf's position in 
 
 The field identifiers for the machine readable zone profiles are declared in `lib/attributes`: `FIELD_DOCUMENT_CODE` 1, `FIELD_ISSUING_STATE` 2, `FIELD_DOCUMENT_NUMBER` 3, `FIELD_NATIONALITY` 4, `FIELD_BIRTH_DATE` 5, `FIELD_SEX` 6, `FIELD_EXPIRY_DATE` 7, `FIELD_NAME` 8, `FIELD_OPTIONAL_DATA` 9, with `FIELD_COUNT` 16. Slots 10 through 16 are filled with `empty_field`, which is identifier `i + 1`, length 0 and zero data, so the tree is always sixteen wide.
 
-Computed in `lib/attributes::build_commitment`. Recomputed in `lib/predicate::open`, which rebuilds the leaf from the opening, walks it to a root with `leaf_to_root16(value, field_id - 1, siblings)` and asserts `commitment(root, domain)` equals the `commitment` public input, with `"predicate: field is not part of the committed document"`. `open` also asserts `field_id >= 1` and `field_id <= 16`, both with `"predicate: field identifier out of range"`.
+Computed in `lib/attributes::build_commitment`. Recomputed in `lib/predicate::open`, which rebuilds the leaf from the opening, walks it to a root with `walk_path(value, field_id - 1, siblings)` and asserts `commitment(root, domain)` equals the `commitment` public input, with `"predicate: field is not part of the committed document"`. `open` also asserts `field_id >= 1` and `field_id <= 16`, both with `"predicate: field identifier out of range"`.
 
 ### 7.12 `commitment(root, domain) = H(TAG_COMMITMENT, root, domain)`, tag 6
 
@@ -249,7 +249,7 @@ Signer trust is checked only when the policy asks for it. With `require_trust_an
 8. `secret` never leaves the prover. Passive Authentication publishes `secret_binding(secret, domain)`, and the nullifier circuit proves it holds the matching secret by recomputing that binding.
 9. A leaf's position in the commitment tree is `field_id - 1`, `field_id` is hashed into the leaf, and the tree is always sixteen wide with unused slots filled by `empty_field`. A statement proved about one field cannot be presented as a statement about another.
 10. `length` is hashed into every leaf, because `normalize::pack_to_4` is big endian with no length prefix and two byte strings differing only in leading zeros pack identically.
-11. Path walks take one direction bit per level from the index and assert the index is in range (`index < 16` for `leaf_to_root16`, `index < 2^D` and `D < 32` for `walk_path`). A sibling cannot be applied on the wrong side.
+11. Path walks take one direction bit per level from the index and assert the index is in range (`index < 2^D` and `D < 32` in `walk_path`). A sibling cannot be applied on the wrong side.
 12. Passive Authentication is what the rest of a bundle hangs off. Exactly one such proof must be present. Every data group, attribute, predicate and nullifier proof reaches it through the chain econtent binding, dg binding, commitment; an anchor proof attaches to it through `dsc_commitment` equality instead, and says nothing about the document's fields.
 13. Every proof in a bundle must carry the same `domain` and the same `context` as the verifier's policy.
 14. Every proof in a bundle must have been produced with a verification key the verifier listed in advance for that circuit. This is what makes a circuit variant a policy decision rather than a prover's choice.
@@ -258,6 +258,6 @@ Signer trust is checked only when the policy asks for it. With `require_trust_an
 
 ## Appendix: circuit sizes
 
-From the commit message of `60f7fef` in the circuits repository, measured with `nargo info`, in ACIR opcodes: `sod_ecdsa_p256_sha256_ec512` 35096, `dg_extract_sha256_ec512` 3299, `attributes_mrz_td1_sha256` 2447, `attributes_mrz_td3_sha256` 2101, `predicate_member` 228, `predicate_compare` 121, `predicate_reveal` 98, `nullifier_document_number` 56. Those eight predate the anchor circuit; the commit message of `613231b`, which added it, gives `anchor_dsc_inclusion` 340 opcodes at registry depth sixteen.
+Opcode counts are in `architecture.md`, which is the only place they are recorded.
 
 That shape is the reason the chain is split the way it is. The signature check runs once and dominates: the two attribute circuits and the extraction circuit are roughly an order of magnitude smaller, and every predicate, the nullifier and the anchor are two orders of magnitude smaller or more, so asking one more question of a document costs a small fraction of the first proof.
