@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 11 circuits, 1 witness tool |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 14 circuits, 3 witness tools |
 | zkICAO/prover | `adc4dcc` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
@@ -169,9 +169,12 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 
 | Circuit | ACIR opcodes |
 |---|---|
+| sod_ecdsa_p256_sha256_ec1024 | 38034 |
 | sod_ecdsa_p256_sha256_ec512 | 35098 |
+| sod_rsa2048_v15_sha256_ec1024 | 11036 |
 | sod_rsa2048_v15_sha256_ec512 | 8100 |
 | anchor_csca_chain_rsa2048_sha256_tbs512 | 6841 |
+| dg_extract_sha256_ec1024 | 6237 |
 | dg_extract_sha256_ec512 | 3301 |
 | attributes_mrz_td1_sha256 | 2449 |
 | attributes_mrz_td3_sha256 | 2103 |
