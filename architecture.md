@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | HEAD `f07efc6` or later (2026-07-26) | 16 library packages, 11 circuits, 1 witness tool |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 11 circuits, 1 witness tool |
 | zkICAO/prover | `adc4dcc` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
