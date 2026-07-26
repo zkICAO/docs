@@ -6,11 +6,11 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 15 circuits, 3 witness tools |
-| zkICAO/prover | `65a4964` | the off-chain verifier, `verify_bundle` |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 17 circuits, 5 witness tools |
+| zkICAO/prover | `0c7e2f0` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
-`b43d83b`, which added the registration circuit, is the last commit that changed a circuit. The repository is under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
+`5257a48`, which added the chain walking registration variant, is the last commit that changed a circuit. The on chain half lives in a fifth repository, zkICAO/contracts, described in section 6.2. The repository is under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
 
 Where something is absent, this document says so rather than describing an intention. The section "What is not implemented" is not a roadmap, it is the boundary of what a proof from this system means.
 
@@ -145,9 +145,9 @@ Passive Authentication proves a key signed the document. Whether that key belong
 
 `bin/anchor/dsc_inclusion`, over `lib/anchor` and `lib/commit`, is the cheap mode. Private: `pubkey_x [u8; 32]`, `pubkey_y [u8; 32]`, `salt Field`, `index u32`, `siblings [Field; 16]`. Public: `registry_root`, `domain`, `context`, then the returned `dsc_commitment`. Four field elements, the narrowest in the set. It proves `pubkey_hash(pubkey_x, pubkey_y)` is a leaf of a depth sixteen Merkle tree with the published root, and nothing else. It verifies no signature and reads no certificate. What it assumes is that whoever built the set checked the certificates behind it.
 
-`bin/anchor/csca_chain_rsa2048_sha256_tbs512`, over `lib/anchor`, `lib/x509`, `lib/rsa`, `lib/hash` and `lib/commit`, removes that assumption. Private: `tbs [u8; 512]`, `tbs_len u32`, `public_key_offset u32`, `not_before_offset u32`, `not_after_offset u32`, `authority_modulus [u128; 18]`, `authority_redc [u128; 18]`, `authority_signature [u128; 18]`, `authority_index u32`, `authority_siblings [Field; 8]`, `salt Field`. Public: `master_list_root`, `current_yyyymmdd u32`, `domain`, `context`, then the returned `dsc_commitment`. Five field elements.
+`bin/anchor/csca_chain_rsa2048_sha256_tbs512`, over `lib/anchor`, `lib/x509`, `lib/rsa`, `lib/hash` and `lib/commit`, removes that assumption. Private: `tbs [u8; 512]`, `tbs_len u32`, `public_key_offset u32`, `not_before_offset u32`, `not_after_offset u32`, `authority_modulus [u128; 18]`, `authority_redc [u128; 18]`, `authority_signature [u128; 18]`, `authority_index u32`, `authority_siblings [Field; 10]`, `salt Field`. Public: `master_list_root`, `current_yyyymmdd u32`, `domain`, `context`, then the returned `dsc_commitment`. Five field elements.
 
-It verifies an RSA PKCS#1 v1.5 signature by the authority over SHA-256 of the certificate body, asserts through `x509::assert_valid_at` that `current_yyyymmdd` falls inside the certificate validity period, asserts that `commit::modulus_hash` of the authority modulus is a leaf of a depth eight Merkle tree with the published master list root, and then reads the subject public key out of the signed body and commits to it. Reading the key out of the certificate rather than taking it as an input is what makes the commitment a commitment to the key the authority actually certified.
+It verifies an RSA PKCS#1 v1.5 signature by the authority over SHA-256 of the certificate body, asserts through `x509::assert_valid_at` that `current_yyyymmdd` falls inside the certificate validity period, asserts that `commit::modulus_hash` of the authority modulus is a leaf of a depth ten Merkle tree with the published master list root, and then reads the subject public key out of the signed body and commits to it. Reading the key out of the certificate rather than taking it as an input is what makes the commitment a commitment to the key the authority actually certified.
 
 What stays trusted in this mode is the list of country signing keys. That list is the anchor of the system and cannot be derived from a document, so it has to come from outside.
 
@@ -171,9 +171,19 @@ The per session proofs are not aggregated: predicates and the nullifier travel b
 
 One property of the backend has to be understood by anyone consuming this. Producing a proof does not check the witness: bb produces a registration proof over a forged inner proof without complaint, and the forgery surfaces only when the registration proof is verified. Proving is not the check; verification is. The bundle command verifies every proof it produces for this reason.
 
-Measured at this revision, on the author's machine: one recursive verification proves in 4.0 seconds at a 1.8 GiB peak, two in 7.5 seconds at 3.5 GiB, and the four here land near 15 seconds. The registration proof is 16000 bytes with the same 500 field element shape as its inputs, so it can itself be verified recursively.
+Measured at this revision, on the author's machine: one recursive verification proves in 4.0 seconds at a 1.8 GiB peak, two in 7.5 seconds at 3.5 GiB, and the four here take 14.4 seconds at a 6.6 GiB peak. The registration proof is 16000 bytes with the same 500 field element shape as its inputs, so it can itself be verified recursively.
 
-### 2.8 tools/mrz_opening
+A second variant, `registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain`, puts `anchor_csca_chain_rsa2048_sha256_tbs512` in the anchor slot: the country signing key certified the signer, checked in circuit rather than assumed of a curated registry. One sharing does the work the off chain date rule does. The chain anchor validates the certificate at a date and the attribute circuit resolves two digit years at a date, and here they are the same witness placed into both public input arrays, so resolving a birth year against one day and certificate validity against another cannot prove. The master list root is exposed where the registry root is, the six field layout is identical, and a verifier tells the variants apart by verification key alone.
+
+### 2.8 session_compare_member
+
+Package `bin/session/compare_member`, over the same recursion library. The rule it implements: a session that asks one question presents the bare predicate, and a session that asks more than one aggregates them, because a second proof in a bundle costs a verification and an aggregated pair costs one.
+
+Private: the verification key and proof of one `predicate_compare` and one `predicate_member` proof, plus `commitment`. Public: `compare_field_id`, `minimum`, `maximum`, `member_field_id`, `set_root`, `domain`, `context`, then the returned `commitment`. Eight field elements.
+
+The commitment, the domain and the context are single witnesses placed into both inner public input arrays, so the two predicates cannot be about different documents, applications or sessions and still prove. The statement values stay public: a verifier reads them off this proof exactly as off the bare predicates, and the returned commitment links against a registration the way a predicate's referenced commitment does. Nine ACIR opcodes; the inner verification key hashes come from the same generated `keys.nr` arrangement.
+
+### 2.9 tools/mrz_opening
 
 `tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. It is executed to solve a witness and never proved: a proof would publish exactly what the commitment exists to hide. It sits outside `bin/` so it is not mistaken for a circuit.
 
@@ -200,6 +210,8 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 | predicate_reveal | 100 |
 | nullifier_document_number | 58 |
 | registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion | 17 |
+| registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain | 17 |
+| session_compare_member | 9 |
 
 Commit `8bfd6d1` recorded the same pair one change earlier, at the same 512 byte buffer: 35080 for the signature circuit and 3297 for the extraction. The extraction circuit re-hashes the same 512 byte buffer, which is what re-deriving `econtent_binding` costs instead of verifying the signature again.
 
@@ -260,10 +272,12 @@ Variants that exist today:
 | `predicate/compare`, `predicate/member`, `predicate/reveal` | no variants |
 | `nullifier/document_number` | one policy |
 | `anchor/dsc_inclusion` | published set of signer keys, depth sixteen |
-| `anchor/csca_chain_rsa2048_sha256_tbs512` | RSA-2048 authority, master list depth eight |
+| `anchor/csca_chain_rsa2048_sha256_tbs512` | RSA-2048 authority, master list depth ten |
 | `registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion` | one inner variant set, pinned by verification key hash |
+| `registration/mrz_td3_ecdsa_p256_sha256_ec512_csca_chain` | the same set with the chain anchor, date tied to the attributes |
+| `session/compare_member` | two predicates of a session as one proof |
 
-Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of eight are likewise fixed in the circuit and absent from the name. If a second size of either is ever needed, the naming scheme has to grow before the package does.
+Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of ten are likewise fixed in the circuit and absent from the name. If a second size of either is ever needed, the naming scheme has to grow before the package does.
 
 A relying party pins the variant by verification key. `Policy::accepted_keys` in the prover maps a circuit kind to the key hashes it accepts, and a proof from any other variant is rejected before its public values are looked at. This is what prevents an algorithm downgrade, and it is also the only thing that distinguishes a TD3 attribute proof from a TD1 one, since the two share an ABI and a circuit kind in the verifier.
 
@@ -299,11 +313,15 @@ What `verify_bundle` deliberately does not do, and what a relying party must the
 - Issue a fresh `context` per exchange and never accept a reused one. Nothing inside a circuit can enforce freshness; the circuits only reject zero.
 - Decide whether a bundle without signer trust is acceptable. A leaf bundle without an anchor proof establishes that some key signed the document and nothing about whose key it is; a registration bundle always carries trust in one fixed registry.
 
-A second entry point covers the sessions after a registration. `verify_session(proofs, policy, registered)` takes the commitment and secret binding the relying party stored when a registration bundle verified, accepts only compare, member, reveal and nullifier proofs, requires each to link to those stored values, and enforces the accepted keys, the domain and the fresh context exactly as `verify_bundle` does; a document proof in a session is refused (`NotASessionProof`). Document trust and dates are not re-examined, because they were the registration's job and are the caller's stored decision. What makes this work on the holder's side is the session salt of the attribute proof: it blinds the registered commitment and every later opening needs it, so for a registered identity it is not a per session value but a secret the holder keeps. A holder who loses it registers again, and the stored nullifier is what makes that visible.
+A second entry point covers the sessions after a registration. `verify_session(proofs, policy, registered)` takes the commitment and secret binding the relying party stored when a registration bundle verified, accepts only compare, member, reveal, nullifier and aggregated session proofs, requires each to link to those stored values, and enforces the accepted keys, the domain and the fresh context exactly as `verify_bundle` does; a document proof in a session is refused (`NotASessionProof`). Document trust and dates are not re-examined, because they were the registration's job and are the caller's stored decision. What makes this work on the holder's side is the session salt of the attribute proof: it blinds the registered commitment and every later opening needs it, so for a registered identity it is not a per session value but a secret the holder keeps. A holder who loses it registers again, and the stored nullifier is what makes that visible.
 
-### 6.2 On chain: the aggregation exists, the contract does not
+### 6.2 On chain: the reference registry
 
-The second model folds a bundle into one proof by recursive verification, so that a chain verifies a single proof and a single set of public inputs instead of a bundle plus a checklist. The aggregation half of that now exists: the registration circuit of section 2.7 folds the four document proofs into one, and the off chain verifier already consumes it as the aggregate bundle form. What does not exist is everything on the chain side of it: a proof over an EVM friendly transcript, the keccak oracle variant bb can produce, a Solidity verifier, and a contract that verifies and stores nullifiers. None of that is in either repository, and nothing in this document should be read as describing an on-chain deployment path that can be built against today.
+The second model verifies on a chain, and it exists in the zkICAO/contracts repository. `ZkIcaoRegistry` is the aggregate bundle form of section 6.1 as a contract: a holder registers with a registration proof and a nullifier proof, both re proved with bb's keccak oracle so the transcript is EVM friendly, and the contract holds the two to each other and to its own policy, its application domain, its signer registry root and its proving date window, then verifies both with Solidity verifiers generated by `bb write_solidity_verifier` and stores the nullifier. A second registration of the same document reverts. The context is the sender address, so a proof is bound to the transaction sender at proving time and reverts in anyone else's transaction.
+
+Measured with forge over real proofs: `register()` costs 6,518,172 gas for the two verifications and storage; the keccak flavored registration proof is 11,072 bytes and the nullifier proof 7,616. Every rejection path is tested against real proofs: a duplicate document, another sender, a tampered proof of either kind, a nullifier from another document, another registry, a date outside the window.
+
+What does not exist on this path: any deployment, any audit, and on chain session questions, which today are an off chain matter against the registered commitment.
 
 ## 7. What is not implemented
 
@@ -317,7 +335,7 @@ Trust. The chain mode verifies one link, an RSA-2048 country signing signature o
 
 Chip presence. Nothing here proves a document was read from a genuine live chip. There is no Active Authentication or Chip Authentication circuit, and no equivalent. Every proof is over data a holder supplies, so a copy of a chip's data produces proofs indistinguishable from the original. This is a property of Passive Authentication, and the system inherits it.
 
-On-chain verification. The recursive aggregation exists, section 2.7; the EVM side, a keccak transcript proof, a Solidity verifier and a contract, does not, section 6.2. Aggregation covers the document chain only, so predicate and nullifier proofs are not aggregated and travel beside a registration proof.
+On-chain deployment. The reference registry, its verifiers and its tests exist and pass, section 6.2; no network has them, and no audit has looked at them. Session questions on chain do not exist. Predicate aggregation covers the compare and member pair; other compositions are added as they are needed.
 
 Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/lds`, `lib/cms`, `lib/attributes` and `lib/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. `policy::assert_supported` and `normalize::pack_alpha3` are called only by their own unit tests. Witness preparation does not exist as code: `lib/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove. The noir_rs pin in `TOOLCHAIN.md` is recorded as intended and is not exercised; the Barretenberg pin is exercised, by the bundle command that proves and verifies every circuit and by the keys subcommand that writes the pinned verification key hashes.
 
@@ -345,8 +363,20 @@ Compute `document_secret` from the same normalized signature the Passive Authent
 
 ## 9. State of the test suite
 
-Re-run at this revision: `nargo test` reports 119 tests passing across the 35 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 19 unit tests across `field.rs`, `layout.rs` and `verify.rs`, one documentation test, and 18 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms. The registration circuit itself has no `#[test]`, because recursion cannot be exercised without the backend; its coverage is the bundle command, which proves and verifies it, and the two adversarial witnesses recorded in commit `b43d83b`.
+Re-run at this revision: `nargo test` reports 119 tests passing across the 39 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 21 unit tests, one documentation test, and 25 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms, the session entry point and the aggregated session. The contracts repository runs 8 forge tests over the same real proofs, including the measured registration. The recursive circuits have no `#[test]`, because recursion cannot be exercised without the backend; their coverage is the bundle command, which proves and verifies every one of them, and the adversarial witnesses recorded in commit `b43d83b`.
 
 The circuit tests cover both layouts end to end and rejections for a swapped signature, swapped signed attributes, a signature over another Security Object with the digest link repaired, a Security Object that was not the authenticated one, an entry read as the wrong data group, a card layout read as a passport, an opening from another document, a field claimed under another identifier, a value outside a published set, a disclosure that does not match, a secret the prover invented, openings supplied in the wrong order, a signer outside the published set, a tampered certificate, an expired certificate, an authority outside the published list, and an unset session context. That last case is tested in four circuits of the eleven, `attributes_mrz_td3_sha256`, `predicate_compare`, `anchor_dsc_inclusion` and `anchor_csca_chain_rsa2048_sha256_tbs512`, although all eleven contain the assertion.
 
 CI in the circuits repository runs `nargo fmt --check`, `nargo compile` and `nargo test` on the pinned compiler. CI in the prover repository runs `cargo build --all-targets`, `cargo fmt --check` and `cargo test`.
+
+## 10. Fixed by the protocol, chosen by the application, kept by the holder
+
+zkICAO is infrastructure, so which values are the project's and which are an integrator's is part of the interface. Everything below was checked against the code at this revision, and nothing anywhere in the five repositories commits private key material: the fixture documents are synthetic and regenerated.
+
+Fixed by the protocol, the same for everyone. The Poseidon2 role tags 1 through 12 and every derived value format in `lib/commit`; the nullifier policy identifiers in `lib/policy`; the tree shapes a circuit compiles in, sixteen leaves for the document commitment, depth eight for membership sets, depth sixteen for the signer registry, depth ten for the master list; the RSA exponent 65537; the public input layouts recorded in `layout.manifest`. Changing any of these is a protocol revision, not a configuration.
+
+Fixed by the toolchain, regenerated rather than configured. Verification keys and their hashes are functions of the compiled bytecode and the backend version, nothing else. The `keys.nr` files a recursive circuit compiles in are written by `cargo run -- keys`, and the Solidity verifiers by `bb write_solidity_verifier`; an integrator who changes a circuit or moves to another toolchain revision regenerates both and must never edit either by hand. On the pinned toolchain, building from source reproduces them.
+
+Chosen by each application. The `domain`, non zero and distinct from every other application, since it scopes every stored value; the accepted verification keys per circuit kind, which is the variant policy and the downgrade gate; exactly one nullifier policy for that domain; the signer registry or master list it trusts, published as a Merkle root it builds itself with the witness tools; the date window; a fresh `context` per exchange. On chain, all of that arrives as constructor parameters of the registry contract, plus the addresses of the verifiers it should trust.
+
+Kept by the holder, never sent anywhere. The session salt behind a registered commitment, which becomes the opening key for every later session; the DSC salt, fresh per session unless the zero salt registry convention is deliberate; the document secret, derived from the chip signature and proved against its binding without leaving the device.
