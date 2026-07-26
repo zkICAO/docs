@@ -212,6 +212,8 @@ Policy identifiers live in `lib/policy`: `DOCUMENT_NUMBER_V1` 1001, `MRZ_STABLE_
 
 On success it returns `Verified { nullifier, dsc_commitment, statements, asserted_date, signer_registry_root }`: the nullifier value if one proof carried it, the salted signer commitment when the document proof exposes one, `None` in the aggregate form, everything the bundle proved as statements, the one date the proofs resolved against, and the registry root the signer was shown to belong to.
 
+For the sessions after a registration, `verify_session(proofs, policy, registered)` runs steps 1, 2 and 7 against a stored commitment and secret binding instead of collected ones. Only question proofs are admitted there; a document proof gives `NotASessionProof`, and trust, dates and anchors play no part because the stored registration already settled them.
+
 Chained together, steps 3 through 6 are the linkage argument for the document data. A signature the issuing state made covers signed attributes; those attributes carry the eContent digest; that digest becomes `econtent_binding`; a data group hash read out of that same eContent becomes `dg_binding`; DG1 hashing to that `dg_binding` becomes `commitment`; a field opened against that `commitment` is what a predicate or the nullifier speaks about. Break any one equality and the proofs are about different documents. Steps 7 and 8 attach the separate question of whose key signed, through `dsc_commitment`.
 
 ## 10. What the verifier does not check

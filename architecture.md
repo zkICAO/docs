@@ -299,6 +299,8 @@ What `verify_bundle` deliberately does not do, and what a relying party must the
 - Issue a fresh `context` per exchange and never accept a reused one. Nothing inside a circuit can enforce freshness; the circuits only reject zero.
 - Decide whether a bundle without signer trust is acceptable. A leaf bundle without an anchor proof establishes that some key signed the document and nothing about whose key it is; a registration bundle always carries trust in one fixed registry.
 
+A second entry point covers the sessions after a registration. `verify_session(proofs, policy, registered)` takes the commitment and secret binding the relying party stored when a registration bundle verified, accepts only compare, member, reveal and nullifier proofs, requires each to link to those stored values, and enforces the accepted keys, the domain and the fresh context exactly as `verify_bundle` does; a document proof in a session is refused (`NotASessionProof`). Document trust and dates are not re-examined, because they were the registration's job and are the caller's stored decision. What makes this work on the holder's side is the session salt of the attribute proof: it blinds the registered commitment and every later opening needs it, so for a registered identity it is not a per session value but a secret the holder keeps. A holder who loses it registers again, and the stored nullifier is what makes that visible.
+
 ### 6.2 On chain: the aggregation exists, the contract does not
 
 The second model folds a bundle into one proof by recursive verification, so that a chain verifies a single proof and a single set of public inputs instead of a bundle plus a checklist. The aggregation half of that now exists: the registration circuit of section 2.7 folds the four document proofs into one, and the off chain verifier already consumes it as the aggregate bundle form. What does not exist is everything on the chain side of it: a proof over an EVM friendly transcript, the keccak oracle variant bb can produce, a Solidity verifier, and a contract that verifies and stores nullifiers. None of that is in either repository, and nothing in this document should be read as describing an on-chain deployment path that can be built against today.
@@ -333,7 +335,7 @@ Use the `context` the verifier issued, and never zero.
 
 Use one salt value for both the `dsc_salt` of the Passive Authentication proof and the `salt` of the anchor proof, or the two commitments will not match. Use a fresh one per session unless the zero salt registry convention is deliberate, since a reused random salt is a value that links sessions.
 
-Use a fresh non-zero `session_salt` per attribute proof. It is the only hiding input in the commitment chain.
+Use a fresh non-zero `session_salt` per attribute proof. It is the only hiding input in the commitment chain. When the commitment is registered for use across sessions, keep that salt: it is the opening key of the registered commitment, later predicate proofs cannot be built without it, and it never travels to the verifier. A fresh salt would produce a new commitment rather than open the registered one.
 
 Normalize ECDSA `s` to `n - s` when it exceeds `n/2` before building the witness. The backend aborts otherwise.
 
