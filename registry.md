@@ -10,7 +10,7 @@ This document was checked against the circuits working tree at commit `ae0a9c8` 
 
 `circuits/lib/anchor/src/lib.nr` defines `prove_signer_is_trusted`, which derives a key hash, walks a Merkle path against a root and returns a `dsc_commitment`. `bin/anchor/dsc_inclusion/src/main.nr` wraps it, adds the scoping asserts and publishes the commitment. Both were committed in `613231b`, "feat: trust anchor by inclusion in a published set of signers". Running `nargo test` during this review passed the library's four tests and the circuit's three.
 
-Two documents in the repository are stale against this and should be corrected where they live rather than worked around here. `circuits/README.md` still says "Only the shared libraries exist so far. No circuit implements the protocol yet." `circuits/TOOLCHAIN.md` still says "RSA is not implemented."
+Both stale claims this section used to flag, a README saying no circuit existed and a toolchain note saying RSA was unimplemented, have since been corrected in the circuits repository.
 
 Work on the chain mode was in the working tree, uncommitted, while this review ran: an `lib/x509` package, certificate fixtures in `lib/testdata`, a `commit::modulus_hash`, and a `prove_signer_is_certified` in `lib/anchor`. None of it is committed, none of it has a circuit package, and none of it is described below as existing. It is mentioned once, in the open questions, because it changes what the remaining gaps are.
 

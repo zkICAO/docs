@@ -12,7 +12,7 @@ It is not an identifier of a person. It is a value derived from one document, on
 
 Two scoping public inputs appear across the circuit chain. `domain` is the application identity, fixed by the relying party. It enters `entropy_seed`, `dg_binding`, `econtent_binding`, `commitment`, `secret_binding` and the nullifier itself. `dsc_commitment` is the one derived value that does not take it: it is scoped by a salt instead, and it is about the signer rather than the holder. `context` is a per session freshness value that enters no derived value, so it cannot make a stored nullifier change between sessions. The nullifier circuit rejects `context == 0` (`"nullifier: context must be set"`).
 
-No circuit in the nullifier chain rejects `domain == 0`; only `bin/anchor/dsc_inclusion` asserts one, with `"anchor: domain must be set"`. The verifier does not close the gap either: `verify_bundle` in `prover/src/verify.rs` tests `policy.context.is_zero()` and returns `ContextNotSet`, and makes no equivalent test on the domain. Two applications that both left the domain unset would share nullifiers, so a relying party must set a distinct non-zero domain itself.
+Every circuit binary asserts `domain != 0` as well as `context != 0`, and `verify_bundle` in `prover/src/verify.rs` rejects a zero policy domain (`DomainNotSet`) exactly as it rejects a zero context (`ContextNotSet`). What no layer can check is distinctness: two applications that chose the same domain share nullifiers, so a relying party must pick one of its own.
 
 ## 2. Derivation
 
@@ -118,13 +118,13 @@ Two mechanical gaps in the shipped verifier (`prover/src/verify.rs`) make this e
 
 `Policy::accept` pushes onto a `Vec` of accepted verification key hashes per circuit, and `Circuit::Nullifier` is one circuit in that map. Once a second nullifier circuit exists, accepting two key hashes for `Circuit::Nullifier` silently admits two policies in one domain, and `Circuit::name` returns the same string `"nullifier"` for every variant, so no failure message would distinguish them. (The `Policy` struct in the prover crate is the verifier's acceptance list; it is unrelated to the policy identifiers in this document, despite the name.)
 
-`verify_bundle` rejects a bundle with more than one Passive Authentication proof (`MoreThanOneSecurityObjectProof`), but has no equivalent check for nullifier proofs. It processes each one and assigns to the same `nullifier` variable, so a bundle carrying several nullifier proofs is accepted and every value but the last is dropped without an error. A relying party should require exactly one.
+`verify_bundle` rejects a bundle with more than one document proof (`MoreThanOneSecurityObjectProof`) and, since `9dab187`, a bundle with more than one nullifier proof (`MoreThanOneNullifierProof`), so the stored value cannot depend on proof ordering. The acceptance list gap above is the one that remains.
 
 ## 8. What a verifier must check
 
 The nullifier circuit alone does not prove that the fields and the secret came from the same document. It opens fields against `commitment` and checks the secret against `secret_binding`, and those two public inputs are independent within the circuit. What links them is the set of equalities across the bundle, implemented in `prover/src/verify.rs`.
 
-The nullifier proof's `secret_binding` (public input index 1) must equal the Passive Authentication proof's `return[2]`, which `prover/src/layout.rs` reads through `sod_secret_binding` at index 4. Without this check, the prover supplies any secret it likes and can mint unlimited nullifiers; the failure is reported as `NullifierFromAnotherDocument`.
+The nullifier proof's `secret_binding` (public input index 1) must equal the one the document proof published: `return[2]` of a Passive Authentication proof, or `return[1]` of a registration proof when the bundle takes the aggregate form. Without this check, the prover supplies any secret it likes and can mint unlimited nullifiers; the failure is reported as `NullifierFromAnotherDocument`.
 
 The nullifier proof's `commitment` must be one an attribute proof in the bundle published, and that attribute proof must chain through a data group binding to the same Security Object. Without this check, a prover holding one document's secret can pair it with field openings from any commitment it can construct and produce many values from one document. The failure is `UnlinkedCommitment`.
 

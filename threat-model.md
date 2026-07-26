@@ -126,7 +126,7 @@ Two failure modes this closes are named in the module header. A bundle whose pro
 
 A relying party integrating against this crate must handle all of the following itself. None of it is checked.
 
-The verifier does not read `dg_number`. `PublicInputs::dg_number` exists but `verify_bundle` never calls it, and `Verified` has no field for it. A bundle establishes that some data group was extracted, not that it was DG1.
+The verifier surfaces `dg_number` as a `Statement::DataGroup` and compares it to nothing, so a leaf bundle establishes which data group was extracted only if the relying party reads the statements. The registration circuit pins the number to 1 in circuit, so the aggregate form does not carry this obligation.
 
 The verifier does not read `current_yyyymmdd`. `PublicInputs::attributes_current_date` exists and is called only by the layout tests. A bundle can carry an attribute proof built against any date the prover chose, which moves birth dates by a century.
 

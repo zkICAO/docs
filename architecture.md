@@ -6,13 +6,11 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 14 circuits, 3 witness tools |
-| zkICAO/prover | `adc4dcc` | the off-chain verifier, `verify_bundle` |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 15 circuits, 3 witness tools |
+| zkICAO/prover | `65a4964` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
-`14a081c` changes documentation only; `6244f20` is the last commit that changed a circuit. The repository is under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
-
-One caution about the pin. `TOOLCHAIN.md` still carries a line saying RSA is not implemented. That line is stale: `lib/rsa` and `bin/sod/rsa2048_v15_sha256_ec512` exist and are described below.
+`b43d83b`, which added the registration circuit, is the last commit that changed a circuit. The repository is under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
 
 Where something is absent, this document says so rather than describing an intention. The section "What is not implemented" is not a roadmap, it is the boundary of what a proof from this system means.
 
@@ -143,7 +141,7 @@ The policy identifier is a constant in `lib/policy` that `lib/nullifier` hashes 
 
 ### 2.6 anchor_dsc_inclusion and anchor_csca_chain_rsa2048_sha256_tbs512
 
-Passive Authentication proves a key signed the document. Whether that key belongs to a state is a separate question, and these two circuits are the two ways of answering it. Both are optional, both return the same `dsc_commitment` the Passive Authentication circuit returns, and the tie in each case is that equality, which the verifier checks and which requires the prover to use the same private salt in both proofs. Since the commitment is a Poseidon2 hash of the key hash and the salt, equality implies the same key hash and the same salt, short of a Poseidon2 collision. For the RSA variant that key hash is `modulus_hash`, which folds every limb, so equality pins the modulus as well. Both anchor circuits are also the only ones that assert `domain != 0` as well as `context != 0`.
+Passive Authentication proves a key signed the document. Whether that key belongs to a state is a separate question, and these two circuits are the two ways of answering it. Both are optional, both return the same `dsc_commitment` the Passive Authentication circuit returns, and the tie in each case is that equality, which the verifier checks and which requires the prover to use the same private salt in both proofs. Since the commitment is a Poseidon2 hash of the key hash and the salt, equality implies the same key hash and the same salt, short of a Poseidon2 collision. For the RSA variant that key hash is `modulus_hash`, which folds every limb, so equality pins the modulus as well. Every circuit binary asserts `domain != 0` as well as `context != 0`; an earlier revision asserted the domain only here, which is why older text singles the anchors out.
 
 `bin/anchor/dsc_inclusion`, over `lib/anchor` and `lib/commit`, is the cheap mode. Private: `pubkey_x [u8; 32]`, `pubkey_y [u8; 32]`, `salt Field`, `index u32`, `siblings [Field; 16]`. Public: `registry_root`, `domain`, `context`, then the returned `dsc_commitment`. Four field elements, the narrowest in the set. It proves `pubkey_hash(pubkey_x, pubkey_y)` is a leaf of a depth sixteen Merkle tree with the published root, and nothing else. It verifies no signature and reads no certificate. What it assumes is that whoever built the set checked the certificates behind it.
 
@@ -157,7 +155,25 @@ What neither mode proves. Neither checks revocation. Neither checks issuer or su
 
 One pairing limit follows from the types. `x509::ec_public_key` is generic over the coordinate width and the chain anchor instantiates it at 32 bytes, so that mode reads an uncompressed elliptic curve point out of the certificate and commits to it through `pubkey_hash`. The RSA Passive Authentication variant derives its key hash with `modulus_hash` instead, and nothing in the chain mode can read an RSA subject key out of a certificate. There is therefore no combination today that chains an RSA Document Signer key to a country signing key, even though both halves exist. The inclusion mode carries the matching gap: it takes two 32 byte coordinate arrays, so a registry of RSA signer keys has no circuit to consume it, and `modulus_hash` is what such a registry would build leaves from.
 
-### 2.7 tools/mrz_opening
+### 2.7 registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion
+
+Package `bin/registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion`, over the `bb_proof_verification` library from the Barretenberg tree, pinned in `TOOLCHAIN.md`.
+
+Private: the verification key and proof of one inner proof from each of `sod_ecdsa_p256_sha256_ec512`, `dg_extract_sha256_ec512`, `attributes_mrz_td3_sha256` and `anchor_dsc_inclusion`, as 115 and 500 field elements each, plus `econtent_binding`, `dsc_commitment`, `secret_binding`, `dg_binding`, `commitment`, `current_yyyymmdd` and `registry_root`. Public: `domain`, `context`, then the returned `commitment`, `secret_binding`, `current_yyyymmdd` and `registry_root`. Six field elements.
+
+It verifies the four proofs inside the circuit. The equalities of section 6.1 are not checked here, they are forced: each linking value is one witness placed into the public inputs of every inner proof that carries it, so two inner proofs cannot disagree about it and still prove. The extraction's data group number is the constant 1, which the off chain checklist can only ask a caller to check.
+
+The verification key hashes are compile time constants in a generated `keys.nr`, written by `cargo run -- keys` in the fixture generator and committed, the same arrangement as `layout.manifest`. The keys themselves are witnesses the backend constrains against those hashes. Substituting a proof from another circuit into a slot was tried, as was a linking value the inner proofs did not commit to, and both make the registration proof fail to verify.
+
+It publishes deliberately less than the four proofs publish. `econtent_binding`, `dg_binding` and `dsc_commitment` only link the inner proofs to each other and stay private. Signer trust is established inside, so the proof exposes which registry was used and not the salted signer commitment.
+
+The per session proofs are not aggregated: predicates and the nullifier travel beside a registration proof, in the bundle form section 6.1 describes.
+
+One property of the backend has to be understood by anyone consuming this. Producing a proof does not check the witness: bb produces a registration proof over a forged inner proof without complaint, and the forgery surfaces only when the registration proof is verified. Proving is not the check; verification is. The bundle command verifies every proof it produces for this reason.
+
+Measured at this revision, on the author's machine: one recursive verification proves in 4.0 seconds at a 1.8 GiB peak, two in 7.5 seconds at 3.5 GiB, and the four here land near 15 seconds. The registration proof is 16000 bytes with the same 500 field element shape as its inputs, so it can itself be verified recursively.
+
+### 2.8 tools/mrz_opening
 
 `tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. It is executed to solve a witness and never proved: a proof would publish exactly what the commitment exists to hide. It sits outside `bin/` so it is not mistaken for a circuit.
 
@@ -183,8 +199,11 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 | predicate_compare | 123 |
 | predicate_reveal | 100 |
 | nullifier_document_number | 58 |
+| registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion | 17 |
 
 Commit `8bfd6d1` recorded the same pair one change earlier, at the same 512 byte buffer: 35080 for the signature circuit and 3297 for the extraction. The extraction circuit re-hashes the same 512 byte buffer, which is what re-deriving `econtent_binding` costs instead of verifying the signature again.
+
+The registration circuit is a special case in this table: its 17 opcodes are almost entirely the four recursive verification intrinsics, whose cost lives in the backend rather than in ACIR, so its economics are the proving times in section 2.7 and not this count.
 
 The ratio is the argument. Against the extraction circuit, Passive Authentication costs about two and a half times as much in the RSA variant and about eleven times as much in the curve variant. Against the four circuits a verifier uses to ask a question, the curve variant costs between 154 and 627 times as much, and the RSA variant between 38 and 156 times. Asking one more question of a document that has already been authenticated costs between 56 and 228 opcodes.
 
@@ -215,7 +234,7 @@ Every binding value, leaf format and salt convention lives in `lib/commit`, and 
 
 `entropy_seed` rejects a zero salt and `nullifier` rejects a zero secret; both are the only zero checks in the library.
 
-`modulus_hash` is the one entry that does not follow the shape rule the header of `lib/commit` states. It is a chain of two wide hashes seeded with `TAG_DSC_KEY`, so its intermediate values have exactly the form of Merkle internal nodes, and its output shares a tag with `pubkey_hash` while being built differently. Two things stand between that and a confusion attack on the master list tree. Each fold step hashes `limbs[i] as Field`, a value cast from `u128` and therefore below 2^128, while an internal node takes a general field element on both sides. And every master list leaf is a fold from the same fixed seed, so matching an internal node would require a preimage rather than a choice of input. The invariant that made this reasoning unnecessary no longer holds for this value, which is reason enough to read it again before the master list format is fixed.
+`modulus_hash` folds the limbs through a chain of two wide hashes and then finishes with a three wide tagged hash over the tag, the limb count and the accumulator. The intermediate values of the fold have the shape of Merkle internal nodes, but they never leave the function; the published value is three wide and tagged, so the width rule separates it from internal nodes, and hashing the limb count separates an 18 limb modulus from any other width. It shares `TAG_DSC_KEY` with `pubkey_hash`, which is five wide, and Poseidon2 separates the two by input length. An earlier revision finished the fold with a two wide hash, which broke the shape rule this paragraph used to flag.
 
 `hash32_to_fields` splits a 32 byte digest into two big endian halves of 16 bytes. `pack_pair` splits two equal length byte strings in half and packs each half into one element, requiring an even length and at most 31 bytes per half. `normalize::pack_to_4` packs up to 124 bytes big endian into four elements of 31 bytes each.
 
@@ -242,6 +261,7 @@ Variants that exist today:
 | `nullifier/document_number` | one policy |
 | `anchor/dsc_inclusion` | published set of signer keys, depth sixteen |
 | `anchor/csca_chain_rsa2048_sha256_tbs512` | RSA-2048 authority, master list depth eight |
+| `registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion` | one inner variant set, pinned by verification key hash |
 
 Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of eight are likewise fixed in the circuit and absent from the name. If a second size of either is ever needed, the naming scheme has to grow before the package does.
 
@@ -255,35 +275,33 @@ This is the model that exists. `verify_bundle` in `prover/src/verify.rs` impleme
 
 A relying party supplies a `Policy`: its `domain`, the `context` it issued for this exchange, the accepted verification key hashes per circuit kind, and optionally a required registry root for the trust anchor.
 
-The order is fixed, and cryptographic verification comes first so that a rejection has a stated reason rather than resting on one proof.
+The order is fixed, and cryptographic verification comes first so that a rejection has a stated reason rather than resting on one proof. A bundle takes one of two forms: the leaf form, a Passive Authentication proof with extraction, attribute and anchor proofs beside it, and the aggregate form, a registration proof standing for those four.
 
-1. Reject immediately if the policy `context` is zero.
-2. For each proof in the bundle, in order: reject if its verification key hash is not on the accepted list for its circuit kind, reject if `bb verify` fails, reject if its `domain` differs from the policy domain, reject if its `context` differs from the policy context. Passive Authentication proofs are collected while passing.
-3. Require exactly one Passive Authentication proof. Zero means nothing establishes the document was signed; more than one means the bundle describes more than one document.
-4. Every data group extraction proof must carry the `econtent_binding` that proof published. Collect the `dg_binding` each one returns.
-5. Every attribute proof must carry a `dg_binding` collected in step 4. Collect the commitment each one returns.
-6. Every compare, member and reveal proof must reference a commitment collected in step 5. Reveal proofs contribute their `field_id` and revealed value to the result.
-7. A nullifier proof must reference a commitment collected in step 5 and must carry the same `secret_binding` the Passive Authentication proof published. Its value becomes the bundle nullifier.
-8. Every anchor proof, of either mode, must carry a `dsc_commitment` equal to the one the Passive Authentication proof published, and if the policy fixes a root, its first public input must equal that root. That input is the registry root in the inclusion mode and the master list root in the chain mode, and the checklist treats them identically, so a policy that fixes a root also fixes which mode can satisfy it.
-9. If the policy requires a trust anchor and no anchor proof was seen, reject.
+1. Reject if the policy `context` is zero, then if its `domain` is zero, then if it requires a trust anchor without fixing a registry root, since that would accept an anchor against any registry, including one the prover published.
+2. For each proof in the bundle, in order: reject if its verification key is not on the accepted list for its circuit kind, reject if `bb verify` fails, reject if its `domain` differs from the policy domain, reject if its `context` differs from the policy context. Acceptance is by the key bytes, not by a digest supplied alongside. Document proofs, Passive Authentication or registration, are collected while passing.
+3. Require exactly one document proof of either kind. Zero means nothing establishes the document; more than one means the bundle describes more than one document, or the same document twice.
+4. In the leaf form: every extraction proof must carry the `econtent_binding` the Passive Authentication proof published, every attribute proof must carry a `dg_binding` an extraction proof returned, and every anchor proof must carry a `dsc_commitment` equal to the Passive Authentication proof's. The extraction numbers become DataGroup statements and the attribute commitments are collected. If the policy fixes a registry root, an anchor proof's first public input must equal it; if it requires a trust anchor and none is present, reject.
+5. In the aggregate form: no extraction, attribute or anchor proof may appear beside the registration proof, because it exposes none of the values they would have to be checked against. The statement that data group 1 was extracted is recorded, the returned commitment is collected, and the registry root must equal the policy's when one is fixed. A required trust anchor is satisfied by construction, since signer trust was proved inside.
+6. Dates. Every proof that resolved dates, an attribute proof, a chain anchor proof or a registration proof, is checked against the policy's `date_window` when one is set, and every date carrying proof in one bundle must have used the same date, so a bundle cannot resolve a birth year against one date and certificate validity against another.
+7. Every compare, member and reveal proof must reference a collected commitment. Each contributes a statement: the field identifier with the bounds, the set root, or the revealed value and its length.
+8. A nullifier proof must reference a collected commitment and must carry the same `secret_binding` the document proof published, from `return[2]` of a Passive Authentication proof or `return[1]` of a registration proof. A second nullifier proof is rejected, so the stored value cannot depend on proof order.
 
-The result is the nullifier if one was present, the `dsc_commitment`, the disclosed fields as identifier and value pairs, and the registry root the signer was shown to belong to if an anchor proof was present.
+The result is the nullifier if one was present, the salted signer commitment when the document proof exposes one, which a registration proof deliberately does not, the statements, the date the proofs resolved against, and the registry root the signer was shown to belong to.
 
-Nothing in `verify.rs` is covered by a test. The crate's 12 unit tests live in `field.rs` and `layout.rs`, and the checklist above has no test module of its own.
+The crate has 19 unit tests, and `tests/bundle.rs` runs 18 more over proofs produced by the circuits, gated behind `ZKICAO_BUNDLE` so an environment without the backend skips them rather than failing. Both bundle forms and the refusal paths above are covered there against real proofs.
 
 What `verify_bundle` deliberately does not do, and what a relying party must therefore do itself:
 
-- Check that `current_yyyymmdd` on an attribute proof is actually today. The accessor `attributes_current_date` exists and the checklist never calls it. A stale date moves a century boundary.
-- Check the `current_yyyymmdd` a chain anchor proof was made against, at public input index 1. There is no accessor for it in `layout.rs` and the checklist does not read it, so an expired Document Signer certificate passes if the prover supplies a date at which it was still valid.
-- Check that `dg_number` on an extraction proof is the data group it asked about. The accessor exists and is unused by the checklist.
-- Check that `field_id`, `minimum`, `maximum` and `set_root` on predicate proofs are the values it asked for. There is no accessor for `minimum`, `maximum` or `set_root` at all, and the checklist reads `field_id` only on reveal proofs, to label the output.
-- Do the nullifier bookkeeping. The checklist returns the value and stores nothing. It also puts no cap on how many nullifier or anchor proofs a bundle carries, unlike the Passive Authentication proof it requires exactly one of; with several, each is checked but the last one seen supplies the reported value.
+- Decide that the asserted date is actually today. The checklist enforces the window the policy sets and nothing more; a policy without `require_date_within` constrains no date, and a stale date moves a century boundary and certificate validity.
+- Read the statements. `dg_number`, the compare bounds, the member set root and the revealed values come back as statements now, and a verifier that ignores them knows that something was proved without knowing it was the question it asked.
+- Do the nullifier bookkeeping. The checklist returns one value and stores nothing.
+- Cap anchor proofs. Several anchor proofs are each checked, but the reported registry root is the last one seen.
 - Issue a fresh `context` per exchange and never accept a reused one. Nothing inside a circuit can enforce freshness; the circuits only reject zero.
-- Decide whether a bundle without an anchor proof is acceptable. Without one, the bundle establishes that some key signed the document and nothing about whose key it is.
+- Decide whether a bundle without signer trust is acceptable. A leaf bundle without an anchor proof establishes that some key signed the document and nothing about whose key it is; a registration bundle always carries trust in one fixed registry.
 
-### 6.2 On-chain by recursive aggregation: not implemented
+### 6.2 On chain: the aggregation exists, the contract does not
 
-The intended second model is to fold the bundle into one proof by recursive verification, so that a chain verifies a single proof and a single set of public inputs instead of a bundle plus a checklist. None of it exists. There is no aggregation circuit, no circuit calls a recursive verification opcode, and there is no Solidity or other on-chain verifier anywhere in either repository. Nothing in this document should be read as describing an on-chain deployment path that can be built against today.
+The second model folds a bundle into one proof by recursive verification, so that a chain verifies a single proof and a single set of public inputs instead of a bundle plus a checklist. The aggregation half of that now exists: the registration circuit of section 2.7 folds the four document proofs into one, and the off chain verifier already consumes it as the aggregate bundle form. What does not exist is everything on the chain side of it: a proof over an EVM friendly transcript, the keccak oracle variant bb can produce, a Solidity verifier, and a contract that verifies and stores nullifiers. None of that is in either repository, and nothing in this document should be read as describing an on-chain deployment path that can be built against today.
 
 ## 7. What is not implemented
 
@@ -297,13 +315,13 @@ Trust. The chain mode verifies one link, an RSA-2048 country signing signature o
 
 Chip presence. Nothing here proves a document was read from a genuine live chip. There is no Active Authentication or Chip Authentication circuit, and no equivalent. Every proof is over data a holder supplies, so a copy of a chip's data produces proofs indistinguishable from the original. This is a property of Passive Authentication, and the system inherits it.
 
-Recursion and on-chain verification, as described in 6.2.
+On-chain verification. The recursive aggregation exists, section 2.7; the EVM side, a keccak transcript proof, a Solidity verifier and a contract, does not, section 6.2. Aggregation covers the document chain only, so predicate and nullifier proofs are not aggregated and travel beside a registration proof.
 
-Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/lds`, `lib/cms`, `lib/attributes` and `lib/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. `policy::assert_supported` and `normalize::pack_alpha3` are called only by their own unit tests. Witness preparation does not exist as code: `lib/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove; the noir_rs and Barretenberg pins in `TOOLCHAIN.md` are recorded as intended and are not exercised.
+Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/lds`, `lib/cms`, `lib/attributes` and `lib/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. `policy::assert_supported` and `normalize::pack_alpha3` are called only by their own unit tests. Witness preparation does not exist as code: `lib/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove. The noir_rs pin in `TOOLCHAIN.md` is recorded as intended and is not exercised; the Barretenberg pin is exercised, by the bundle command that proves and verifies every circuit and by the keys subcommand that writes the pinned verification key hashes.
 
 Real documents. Every fixture in `lib/testdata` is generated by `fixtures/generator`, which builds synthetic Doc 9303 material over the specimen machine readable zones from the standard: DG1, a Security Object, CMS signed attributes, a signature under a generated Document Signer key, and a Document Signer certificate signed by a generated country signing key. No test in either repository runs against a document issued by a state.
 
-The repository was bootstrapped on 2026-07-23 and the pinned revision is from 2026-07-25, so the whole set above is two days of work and is still growing. Two gaps this document originally listed as absent, RSA Passive Authentication and country signing certificate verification, were filled while it was being written. Re-read the inventory against the revision you are auditing.
+The repository was bootstrapped on 2026-07-23 and the pinned revision is from 2026-07-26, so the whole set above is three days of work and is still growing. Three gaps this document originally listed as absent, RSA Passive Authentication, country signing certificate verification and recursive aggregation, were filled while it was being maintained. Re-read the inventory against the revision you are auditing.
 
 ## 8. Obligations on the prover
 
@@ -325,7 +343,7 @@ Compute `document_secret` from the same normalized signature the Passive Authent
 
 ## 9. State of the test suite
 
-Re-run at this revision: `nargo test` reports 118 tests passing across the 30 workspace packages, matching the count commit `6244f20` records, and `cargo test` in `fixtures/generator` reports 17. The prover crate has 12 unit tests. They live in `field.rs` and `layout.rs`; `verify.rs`, which holds the whole checklist, has no test module, so the binding rules in section 6.1 are unexercised by any test.
+Re-run at this revision: `nargo test` reports 119 tests passing across the 35 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 19 unit tests across `field.rs`, `layout.rs` and `verify.rs`, one documentation test, and 18 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms. The registration circuit itself has no `#[test]`, because recursion cannot be exercised without the backend; its coverage is the bundle command, which proves and verifies it, and the two adversarial witnesses recorded in commit `b43d83b`.
 
 The circuit tests cover both layouts end to end and rejections for a swapped signature, swapped signed attributes, a signature over another Security Object with the digest link repaired, a Security Object that was not the authenticated one, an entry read as the wrong data group, a card layout read as a passport, an opening from another document, a field claimed under another identifier, a value outside a published set, a disclosure that does not match, a secret the prover invented, openings supplied in the wrong order, a signer outside the published set, a tampered certificate, an expired certificate, an authority outside the published list, and an unset session context. That last case is tested in four circuits of the eleven, `attributes_mrz_td3_sha256`, `predicate_compare`, `anchor_dsc_inclusion` and `anchor_csca_chain_rsa2048_sha256_tbs512`, although all eleven contain the assertion.
 
