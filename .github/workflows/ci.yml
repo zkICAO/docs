@@ -6,30 +6,28 @@ jobs:
   check:
     runs-on: ubuntu-latest
 
-    # The secrets context is not available to an if condition, so the token
-    # is lifted into the environment where one can test it.
-    env:
-      CIRCUITS_TOKEN: ${{ secrets.CIRCUITS_READ_TOKEN }}
-
     steps:
       - uses: actions/checkout@v4
         with:
           path: docs
 
-      # The path check needs the code these documents describe. The circuits
-      # repository is private, so this needs a token that can read it. Set
-      # CIRCUITS_READ_TOKEN to enable it; without the secret the step is
-      # skipped and the run says which checks it did not perform, rather
-      # than reporting success over nothing.
-      - name: check out the circuits repository
-        if: env.CIRCUITS_TOKEN != ''
+      # The path half of the check needs the code these documents describe.
+      # No credential is provisioned for it: a token would have to be issued
+      # and rotated by a person, and a check that depends on someone
+      # remembering to do that is a check that silently stops working. The
+      # checkout is attempted without one, which succeeds once the circuits
+      # repository is public and is skipped until then.
+      - name: check out the circuits repository if it can be read
+        continue-on-error: true
         uses: actions/checkout@v4
         with:
           repository: zkICAO/circuits
-          token: ${{ secrets.CIRCUITS_READ_TOKEN }}
           path: circuits
 
-      - name: check the documents against the code
+      # The script says which checks it ran. Without a circuits checkout it
+      # checks the prose and the links between these documents and reports
+      # that it did not check the paths, rather than passing over nothing.
+      - name: check the documents
         working-directory: docs
         run: |
           if [ -f ../circuits/Nargo.toml ]; then
