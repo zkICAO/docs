@@ -16,7 +16,7 @@ Every circuit binary asserts `domain != 0` as well as `context != 0`, and `verif
 
 ## 2. Derivation
 
-All values are Poseidon2 hashes over the BN254 scalar field, defined once in `circuits/lib/commit/src/lib.nr`. Every derived value starts with a role tag so a value produced for one role cannot be replayed as another. `commit::hash_pair`, the Merkle internal node, is the one exception: it is deliberately untagged and two wide, and `lib/commit` records that every tagged value is three wide or more, which is what stops a leaf or a seed being read as an internal node.
+All values are Poseidon2 hashes over the BN254 scalar field, defined once in `circuits/lib/core/commit/src/lib.nr`. Every derived value starts with a role tag so a value produced for one role cannot be replayed as another. `commit::hash_pair`, the Merkle internal node, is the one exception: it is deliberately untagged and two wide, and `lib/core/commit` records that every tagged value is three wide or more, which is what stops a leaf or a seed being read as an internal node.
 
 ```
 document_secret = Poseidon2([11, r_hi, r_lo, s_hi, s_lo], 5)          # TAG_DOCUMENT_SECRET
@@ -25,7 +25,7 @@ nullifier       = Poseidon2([7, policy_id, p0, p1, p2, p3,
                              document_secret, domain], 8)              # TAG_NULLIFIER
 ```
 
-`r_hi, r_lo, s_hi, s_lo` come from `pack_pair`, a private helper in `lib/commit` reachable only through `pubkey_hash` and `document_secret`. It splits each component in half and packs each half big endian into one field element. It asserts the component length is even (`"commit: length must be even"`) and that each half is at most 31 bytes (`"commit: half does not fit a field element"`), so a component may not exceed 62 bytes.
+`r_hi, r_lo, s_hi, s_lo` come from `pack_pair`, a private helper in `lib/core/commit` reachable only through `pubkey_hash` and `document_secret`. It splits each component in half and packs each half big endian into one field element. It asserts the component length is even (`"commit: length must be even"`) and that each half is at most 31 bytes (`"commit: half does not fit a field element"`), so a component may not exceed 62 bytes.
 
 `p0..p3` is the packed payload the policy defines. For `DOCUMENT_NUMBER_V1` it is
 
@@ -33,9 +33,9 @@ nullifier       = Poseidon2([7, policy_id, p0, p1, p2, p3,
 p = [issuing_state.data[0], number.data[0], number.data[1], number.data[2]]
 ```
 
-taken from two field openings passed through `predicate::open_field`, which rebuilds each leaf with `commit::leaf`, walks it to the root and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published. The identifiers are field id 2 (issuing state) and field id 3 (document number), fixed as `FIELD_ISSUING_STATE` and `FIELD_DOCUMENT_NUMBER` in `circuits/lib/attributes/src/lib.nr`.
+taken from two field openings passed through `predicate::open_field`, which rebuilds each leaf with `commit::leaf`, walks it to the root and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published. The identifiers are field id 2 (issuing state) and field id 3 (document number), fixed as `FIELD_ISSUING_STATE` and `FIELD_DOCUMENT_NUMBER` in `circuits/lib/emrtd/attributes/src/lib.nr`.
 
-`commit::nullifier` asserts `secret != 0` (`"commit: nullifier secret must be non-zero"`). It does not check the policy identifier: `policy::assert_supported` exists and is tested but is called by no circuit, because the identifier is a compile time constant inside each nullifier circuit rather than an input. The only use of the policy crate in circuit code is the constant `policy::DOCUMENT_NUMBER_V1` at line 61 of `circuits/lib/nullifier/src/lib.nr`.
+`commit::nullifier` asserts `secret != 0` (`"commit: nullifier secret must be non-zero"`). It does not check the policy identifier, and nothing else does either: the identifier is a compile time constant inside each nullifier circuit rather than an input, so there is no runtime value to validate. An earlier revision carried a validator for it, which no circuit ever called; it was removed. The only use of the policy library in circuit code is the constant `policy::DOCUMENT_NUMBER_V1` in `circuits/lib/claims/nullifier/src/lib.nr`.
 
 The value is stable for one document in one domain because nothing in the preimage varies between sessions. That is deliberate and it is also the source of the linkability discussed in section 9.
 
@@ -55,32 +55,27 @@ The two properties are established at different points. Unguessability comes fro
 
 The signature fits the two properties, subject to what follows. It is fixed at issuance, so a prover who is bound to a genuine document cannot choose it, and it is not printed on the data page, so it cannot be guessed from a copy of one.
 
-Non choosability requires a trust anchor, and the shipped verifier does not require one by default. The Passive Authentication circuit constrains the secret to material that verifies under the Document Signer's public key, and the verifier checks that the nullifier proof carries the same `secret_binding` the Passive Authentication proof published. That is not sufficient on its own. In `bin/sod/ecdsa_p256_sha256_ec512` the public key is a private input, and the circuit publishes only `dsc_commitment(pubkey_hash(pubkey_x, pubkey_y), dsc_salt)` with a prover supplied salt, so the proof says some key signed the document and nothing about whose key it is. `prover/src/verify.rs` says the same in the doc comment on `Verified::signer_registry_root`. A relying party that does not call `Policy::require_anchor` gets `require_trust_anchor: false` from `Policy::new`, and a prover can then generate its own key pair, sign a Security Object it built, choose `(r, s)` and mint as many secrets as it likes. Non choosability therefore holds only against a verifier that requires a trust anchor proof against a registry it published, using `bin/anchor/dsc_inclusion`. That circuit proves the signer key is in a published set and, as `lib/anchor` states, assumes whoever built the set checked the certificates behind it; verifying the country signing certificate in circuit is not implemented.
+Non choosability requires a trust anchor, and the shipped verifier does not require one by default. The Passive Authentication circuit constrains the secret to material that verifies under the Document Signer's public key, and the verifier checks that the nullifier proof carries the same `secret_binding` the Passive Authentication proof published. That is not sufficient on its own. In `bin/sod/ecdsa_p256_sha256_ec512` the public key is a private input, and the circuit publishes only `dsc_commitment(pubkey_hash(pubkey_x, pubkey_y), dsc_salt)` with a prover supplied salt, so the proof says some key signed the document and nothing about whose key it is. `prover/src/verify.rs` says the same in the doc comment on `Verified::signer_registry_root`. A relying party that does not call `Policy::require_anchor` gets `require_trust_anchor: false` from `Policy::new`, and a prover can then generate its own key pair, sign a Security Object it built, choose `(r, s)` and mint as many secrets as it likes. Non choosability therefore holds only against a verifier that requires a trust anchor proof against a registry it published, using `bin/anchor/dsc_inclusion`. That circuit proves the signer key is in a published set and, as `lib/trust/anchor` states, assumes whoever built the set checked the certificates behind it; verifying the country signing certificate in circuit is not implemented.
 
-Non choosability also depends on one thing an auditor should verify against the ECDSA dependency, not against this repository. ECDSA verification accepts `(r, s)` exactly when it accepts `(r, n - s)`, so two representations of the same signing act exist and they hash to two different secrets. `circuits/lib/sig/src/lib.nr` documents that the backend rejects any `s` above `n/2` and aborts rather than returning false, which would force the low `s` representative and make the secret canonical. That is a claim in a module comment about the external `ecdsa` and `bigcurve` libraries, and nothing in this repository tests it. If it were ever untrue, a prover could choose between two secrets for one document and produce two nullifiers in one domain.
+Non choosability also depends on one thing an auditor should verify against the ECDSA dependency, not against this repository. ECDSA verification accepts `(r, s)` exactly when it accepts `(r, n - s)`, so two representations of the same signing act exist and they hash to two different secrets. `circuits/lib/core/sig/src/lib.nr` documents that the backend rejects any `s` above `n/2` and aborts rather than returning false, which would force the low `s` representative and make the secret canonical. That is a claim in a module comment about the external `ecdsa` and `bigcurve` libraries, and nothing in this repository tests it. If it were ever untrue, a prover could choose between two secrets for one document and produce two nullifiers in one domain.
 
-`lib/sig` also states that normalization of `s` before witness building is the caller's job and that no such code exists yet. That is true of the path a real document would take: the `prover` crate is verification only (`field.rs`, `layout.rs`, `verify.rs`) and builds no witnesses. It is not true of the whole repository. `circuits/fixtures/generator/src/ec.rs` defines `normalize_s`, applies it to every signature it generates in `sign_sha256`, and tests it. The test fixtures are therefore already low `s`, which is why the circuit tests pass and why the gap would only show against a real document.
+`lib/core/sig` also states that normalization of `s` before witness building is the caller's job and that no such code exists yet. That is true of the path a real document would take: the `prover` crate is verification only (`field.rs`, `layout.rs`, `verify.rs`) and builds no witnesses. It is not true of the whole repository. `circuits/fixtures/generator/src/ec.rs` defines `normalize_s`, applies it to every signature it generates in `sign_sha256`, and tests it. The test fixtures are therefore already low `s`, which is why the circuit tests pass and why the gap would only show against a real document.
 
 The cost is reissue. A replacement document carries a different signature, so it produces a different secret and a different nullifier. Whatever the policy says about which fields it uses, no value derived from this secret survives document replacement. `commit::document_secret` documents this, and it is why only the document number policy is built on it.
 
-There is also a size limit. `pack_pair` rejects components longer than 62 bytes, so `document_secret` as written covers the ECDSA curves the repository wraps (P-256, P-384, brainpoolP384r1) and cannot take an RSA signature. RSA has both halves now: `bin/sod/rsa2048_v15_sha256_ec512` verifies the signature, and `commit::modulus_hash` and `commit::limbs_document_secret` fold a modulus and a signature given as limbs, so the key commitment and the document secret cover the whole of each.
+There is also a size limit. `pack_pair` rejects components longer than 62 bytes, so `document_secret` as written covers P-256, the curve the repository wraps, and would cover a larger curve added beside it, but cannot take an RSA signature. RSA has both halves now: `bin/sod/rsa2048_v15_sha256_ec512` verifies the signature, and `commit::modulus_hash` and `commit::limbs_document_secret` fold a modulus and a signature given as limbs, so the key commitment and the document secret cover the whole of each.
 
 ## 5. Policy identifiers
 
 A policy fixes which document fields derive the payload, and therefore what uniqueness the value carries. The identifier is hashed into the nullifier preimage, so two policies cannot produce the same value for the same holder.
 
-Identifiers encode a family and a version as `family * 1000 + version`. The constants in `circuits/lib/policy/src/lib.nr` are:
+Identifiers encode a family and a version as `family * 1000 + version`. `circuits/lib/claims/policy/src/lib.nr` declares one:
 
-| Constant | Value |
-|---|---|
-| `FAMILY_DOCUMENT_NUMBER` | 1 |
-| `FAMILY_MRZ_STABLE` | 2 |
-| `FAMILY_NATIONAL_IDENTIFIER` | 3 |
-| `DOCUMENT_NUMBER_V1` | 1001 |
-| `MRZ_STABLE_V1` | 2001 |
-| `NATIONAL_IDENTIFIER_V1` | 3001 |
+| Constant | Value | Family | Version |
+|---|---|---|---|
+| `DOCUMENT_NUMBER_V1` | 1001 | 1 | 1 |
 
-Family numbers are not identifiers. `assert_supported` accepts only the three identifier values and rejects anything else with `"policy: unsupported policy identifier"`, including a bare family number and an unminted version; its tests cover 9999 and `FAMILY_MRZ_STABLE`.
+A family number on its own is not an identifier, because it names no version. A second policy takes the next free family number and mints its own identifier alongside its derivation function and its circuit.
 
 A revision takes a new version and therefore a new identifier. The consequence is operational, not cosmetic: values derived under the old identifier and the new one are unrelated, so revising a policy is a migration for every application that used it, and every existing registration has to be re-established or carried forward by some other means. There is no upgrade path built into the scheme.
 
@@ -88,11 +83,9 @@ A policy identifier must pin the packing as well as the field selection. Two pro
 
 ## 6. Which policies are defined and which exist in a circuit
 
-Only `DOCUMENT_NUMBER_V1` is implemented. It has a derivation function, `nullifier::document_number` in `circuits/lib/nullifier/src/lib.nr`, and a circuit, `circuits/bin/nullifier/document_number/src/main.nr`.
+Only `DOCUMENT_NUMBER_V1` is implemented. It has a derivation function, `nullifier::document_number` in `circuits/lib/claims/nullifier/src/lib.nr`, and a circuit, `circuits/bin/nullifier/document_number/src/main.nr`.
 
-`MRZ_STABLE_V1` and `NATIONAL_IDENTIFIER_V1` are reserved identifiers only. No derivation function, no payload definition and no circuit exists for either. The comments in `lib/policy` describe what those families are intended to mean; they are intent, not implementation.
-
-`MRZ_STABLE_V1` in particular cannot be implemented as described on top of the shipped secret. Its stated point is stability across reissue, and the shipped secret changes on reissue, so a circuit that combined the two would produce a value that fails the promise its identifier makes. A reissue stable policy needs a secret that is not chip bound, and no such source is specified or implemented here. Section 9 sets out what that would cost.
+Earlier revisions also declared identifiers for two policies that had no derivation function, no payload definition and no circuit: one keyed on fields that survive reissue, one on a national identifier. They were removed. A minted identifier is a promise about a guarantee, and one of those two could not have been kept at all: its stated point is stability across reissue, while the shipped secret changes on reissue, so any circuit combining the two would produce a value that fails the promise the identifier makes. A reissue stable policy needs a secret that is not chip bound, and no such source is specified or implemented here. Section 9 sets out what that would cost.
 
 The circuit's public inputs, taken from the generated `layout.manifest` in the prover crate, are:
 
@@ -100,7 +93,7 @@ The circuit's public inputs, taken from the generated `layout.manifest` in the p
 nullifier_document_number  commitment  secret_binding  domain  context  return[0]
 ```
 
-The policy identifier is not among them. The module comment in `circuits/lib/policy/src/lib.nr` says the identifier is a public input; that is not true of the shipped circuit. A verifier learns which policy it received from the verification key it accepted, and from nothing else. Either the circuit should publish the identifier or that comment should be corrected; until then, verification key selection is load bearing and must be treated as such.
+The policy identifier is not among them. The library header states this: the identifier is not a public input, and a verifier learns which policy it received from the verification key it accepted and from nothing else. Verification key selection is load bearing and must be treated as such.
 
 The nullifier is the cheapest circuit in the repository and the document authentication it depends on is the most expensive, by roughly three orders of magnitude. Opcode counts are in `architecture.md`, which is the only place they are recorded.
 
@@ -116,7 +109,7 @@ The same applies to a policy accepted alongside a revision of itself, because a 
 
 Two mechanical gaps in the shipped verifier (`prover/src/verify.rs`) make this easy to get wrong, and an integrator has to close both.
 
-`Policy::accept` pushes onto a `Vec` of accepted verification key hashes per circuit, and `Circuit::Nullifier` is one circuit in that map. Once a second nullifier circuit exists, accepting two key hashes for `Circuit::Nullifier` silently admits two policies in one domain, and `Circuit::name` returns the same string `"nullifier"` for every variant, so no failure message would distinguish them. (The `Policy` struct in the prover crate is the verifier's acceptance list; it is unrelated to the policy identifiers in this document, despite the name.)
+`Policy::accept` pushes onto a `Vec` of accepted verification keys per circuit, and `Circuit::Nullifier` is one circuit in that map. Once a second nullifier circuit exists, accepting two key hashes for `Circuit::Nullifier` silently admits two policies in one domain, and `Circuit::name` returns the same string `"nullifier"` for every variant, so no failure message would distinguish them. (The `Policy` struct in the prover crate is the verifier's acceptance list; it is unrelated to the policy identifiers in this document, despite the name.)
 
 `verify_bundle` rejects a bundle with more than one document proof (`MoreThanOneSecurityObjectProof`) and, since `9dab187`, a bundle with more than one nullifier proof (`MoreThanOneNullifierProof`), so the stored value cannot depend on proof ordering. The acceptance list gap above is the one that remains.
 
@@ -148,12 +141,12 @@ The payload construction has edges. `nullifier::document_number` packs `number.d
 
 `mrz::check_digit_ok` accepts the filler character 0x3C in place of a check digit, and `td3_validate` and `td1_validate` call it with that allowance for the document number and the optional data. The comment above it gives the reason: Doc 9303 lets a document number longer than nine characters continue into the optional data field and leave its own check digit position as filler. That reading of the standard should be checked against Doc 9303 itself. What the code fixes either way is that the committed document number field holds nine characters.
 
-The field identifiers are duplicated rather than imported. `lib/nullifier` asserts `field_id == 2` and `field_id == 3` as literals, with the messages `"nullifier: first opening must be the issuing state"` and `"nullifier: second opening must be the document number"`, and `bin/nullifier/document_number/src/main.nr` builds both `FieldOpening` values with the same literals inline. `lib/nullifier/Nargo.toml` lists commit, policy and predicate as dependencies and not attributes, so `attributes::FIELD_ISSUING_STATE` and `attributes::FIELD_DOCUMENT_NUMBER` are copied in three places with no compile time link. A renumbering in `lib/attributes` would not break the build.
+The field identifiers are duplicated rather than imported. `lib/claims/nullifier` asserts `field_id == 2` and `field_id == 3` as literals, with the messages `"nullifier: first opening must be the issuing state"` and `"nullifier: second opening must be the document number"`, and `bin/nullifier/document_number/src/main.nr` builds both `FieldOpening` values with the same literals inline. `lib/claims/nullifier/Nargo.toml` lists commit, policy and predicate as dependencies and not attributes, so `attributes::FIELD_ISSUING_STATE` and `attributes::FIELD_DOCUMENT_NUMBER` are copied in three places with no compile time link. A renumbering in `lib/emrtd/attributes` would not break the build.
 
 Everything above rests on Poseidon2 over BN254 being collision resistant and preimage resistant at the widths used, and on the domain separation tags being unique per role. `TAG_NULLIFIER` is 7, `TAG_DOCUMENT_SECRET` is 11 and `TAG_SECRET_BINDING` is 12; new roles must take new tags, and no tag may be reused at the same width.
 
 ## 10. Test coverage as it stands
 
-The tests that exist for this area are in `circuits/lib/policy/src/lib.nr` (three, covering acceptance of the three identifiers and rejection of an unknown value and of a bare family number), `circuits/lib/nullifier/src/lib.nr` (six, covering determinism within a domain, unlinkability across domains, dependence on the secret, a guessed secret, openings in the wrong order and a field taken from another document), and `circuits/bin/nullifier/document_number/src/main.nr` (two, covering a stable value and a secret the prover invented). Running `nargo test` on each of the three packages gives 3, 6 and 2 tests respectively, all passing.
+The tests for this area are in `circuits/lib/claims/nullifier/src/lib.nr` (six, covering determinism within a domain, unlinkability across domains, dependence on the secret, a guessed secret, openings in the wrong order and a field taken from another document) and `circuits/bin/nullifier/document_number/src/main.nr` (two, covering a stable value and a secret the prover invented). The policy library declares one constant and has no behaviour to test.
 
-No test covers the one domain, one policy rule, because a second policy does not exist to violate it with. No test covers a bundle carrying two nullifier proofs, and `prover/src/verify.rs` has no tests of `verify_bundle` at all: the twelve tests in that crate are in `field.rs` and `layout.rs`, and the `layout.rs` tests check the public input table against `layout.manifest` rather than exercising the bundle equalities.
+No test covers the one domain, one policy rule, because a second policy does not exist to violate it with. A bundle carrying two nullifier proofs is covered, in `prover/tests/bundle.rs` against real proofs, along with the rest of the checklist.

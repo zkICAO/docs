@@ -2,7 +2,7 @@
 
 This chapter states what the zkICAO circuits and the off-chain verifier defend against, what they leave to the parties around them, and what they do not address at all. It describes the code as it exists in `circuits/lib`, `circuits/bin` and `prover/src/verify.rs`. Where a protection is claimed here, a constraint in that code enforces it, and the assertion message is quoted so a reader can find it.
 
-The code moves quickly, so this chapter is pinned to a state: circuits commit `ae0a9c8`, with an uncommitted `lib/x509` package in the working tree, and prover commit `204d352`, with a regenerated `layout.manifest` in the working tree. Claims below were checked against exactly that state. `nargo test` passes on the whole circuits workspace under the pinned toolchain, and `cargo test` in the prover crate passes twelve tests plus one doc test.
+The code moves quickly, so this chapter is pinned to a state: circuits commit `ae0a9c8`, with an uncommitted `lib/core/x509` package in the working tree, and prover commit `204d352`, with a regenerated `layout.manifest` in the working tree. Claims below were checked against exactly that state. `nargo test` passes on the whole circuits workspace under the pinned toolchain, and `cargo test` in the prover crate passes twelve tests plus one doc test.
 
 zkICAO is an independent project. It is not affiliated with, endorsed by, or certified by ICAO or any government.
 
@@ -10,9 +10,9 @@ zkICAO is an independent project. It is not affiliated with, endorsed by, or cer
 
 In scope: the ten circuits under `circuits/bin` (`sod/ecdsa_p256_sha256_ec512`, `sod/rsa2048_v15_sha256_ec512`, `dg_extract/sha256_ec512`, `attributes/mrz_td3_sha256`, `attributes/mrz_td1_sha256`, `predicate/compare`, `predicate/member`, `predicate/reveal`, `nullifier/document_number`, `anchor/dsc_inclusion`), the libraries they are built from, and `verify_bundle` in `prover/src/verify.rs`.
 
-Out of scope, because no code for it exists in this repository: reading the chip, building witnesses from a document that was read, transporting proofs, on-chain verification, and any credential or aggregation layer. The `README.md` design sketch lists `anchor/csca-chain` and `credential` as intended components; neither is implemented. A `lib/x509` package with certificate parsing helpers sits in the circuits working tree, uncommitted, and no binary circuit depends on it, so nothing in the proving flow reads a certificate.
+Out of scope, because no code for it exists in this repository: reading the chip, building witnesses from a document that was read, transporting proofs, on-chain verification, and any credential or aggregation layer. The `README.md` design sketch lists `anchor/csca-chain` and `credential` as intended components; neither is implemented. A `lib/core/x509` package with certificate parsing helpers sits in the circuits working tree, uncommitted, and no binary circuit depends on it, so nothing in the proving flow reads a certificate.
 
-Two libraries ship without a circuit that uses them. `lib/sig` carries `verify_ecdsa_p384` and `verify_ecdsa_brainpool384` alongside the P-256 entry point, and no circuit calls either, nor does any test vector exercise them.
+Every library that ships has a circuit that uses it. Entry points without a circuit behind them, two unused curve wrappers and a country code packer among them, were removed rather than left as untested code paths in a cryptographic library.
 
 Maturity matters to how this document should be read. Every end-to-end test runs against synthetic documents produced by `circuits/fixtures/generator`, which generates its own Document Signer keys through the openssl command line tool and signs the Doc 9303 specimen machine readable zones. The header of `circuits/fixtures/generator/src/main.rs` says so directly: "No genuine document is involved, and regenerating produces a fresh key, so the committed output is the fixture of record." No genuine issued document has been exercised through this pipeline.
 
@@ -52,7 +52,7 @@ The consequence is that a modified Security Object cannot be presented. A single
 
 Two signature variants ship, both over a Security Object buffer of 512 bytes.
 
-`sod/ecdsa_p256_sha256_ec512` calls `sig::verify_ecdsa_p256`, which fails with `"sig: ecdsa p256 verification failed"`. It also calls `validate_in_field()` on the decoded key coordinates and signature scalars, because, as the header of `circuits/lib/sig/src/lib.nr` records, byte deserialization in noir-bignum enforces only that a value is below `2^MOD_BITS`, not that it is reduced.
+`sod/ecdsa_p256_sha256_ec512` calls `sig::verify_ecdsa_p256`, which fails with `"sig: ecdsa p256 verification failed"`. It also calls `validate_in_field()` on the decoded key coordinates and signature scalars, because, as the header of `circuits/lib/core/sig/src/lib.nr` records, byte deserialization in noir-bignum enforces only that a value is below `2^MOD_BITS`, not that it is reduced.
 
 `sod/rsa2048_v15_sha256_ec512` calls `rsa::verify_pkcs1_v15_sha256`, which recovers the encoded message by raising the signature to 65537 and then constrains every byte of it: the leading zero (`"rsa: encoded message must start with zero"`), the block type (`"rsa: wrong block type"`), the whole padding run (`"rsa: padding must be all ones"`), the separator (`"rsa: missing padding separator"`), the SHA-256 digest info (`"rsa: digest info does not describe sha-256"`) and the digest itself (`"rsa: digest does not match"`). Constraining the full padding run is what stops a forger placing the digest info at another offset. Only the exponent 65537 is implemented, so a key with any other exponent cannot be verified here at all.
 
@@ -80,7 +80,7 @@ The commitment is built over sixteen leaves with `commit::leaf`, each carrying i
 
 ### 3.4 Field predicates
 
-Every predicate opens the field first, through the private `open` in `circuits/lib/predicate/src/lib.nr`, which the nullifier reaches through the exported `predicate::open_field`. It bounds the field identifier (`"predicate: field identifier out of range"`), rebuilds the leaf, walks it to a root using `field_id - 1` as the Merkle index, and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published, failing with `"predicate: field is not part of the committed document"`.
+Every predicate opens the field first, through the private `open` in `circuits/lib/claims/predicate/src/lib.nr`, which the nullifier reaches through the exported `predicate::open_field`. It bounds the field identifier (`"predicate: field identifier out of range"`), rebuilds the leaf, walks it to a root using `field_id - 1` as the Merkle index, and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published, failing with `"predicate: field is not part of the committed document"`.
 
 Deriving the index from the field identifier rather than accepting it separately is what stops a value being claimed under a different identifier. The test `predicate::rejects_a_field_claimed_under_another_identifier` changes only `field_id` and confirms the opening no longer reaches the committed root.
 
@@ -94,7 +94,7 @@ The secret is `commit::document_secret` over the Security Object signature. The 
 
 The resulting value is deterministic per document per `domain`, and unlinkable across domains because `domain` is hashed into it. Tests `the_same_document_gives_the_same_value_within_an_application` and `different_applications_give_unlinkable_values` cover both directions.
 
-The policy identifier is `policy::DOCUMENT_NUMBER_V1`, passed as a constant inside `nullifier::document_number`. It is not a public input, so a relying party learns which policy produced a nullifier only from which verification key it accepted. Note that the header comment on `circuits/lib/policy/src/lib.nr` says the identifier "is a public input", which does not match the shipped circuit; `prover/layout.manifest` records the nullifier public inputs as `commitment secret_binding domain context return[0]`. `policy::assert_supported` exists but is called by no circuit; the only callers are its own tests.
+The policy identifier is `policy::DOCUMENT_NUMBER_V1`, passed as a constant inside `nullifier::document_number`. It is not a public input, so a relying party learns which policy produced a nullifier only from which verification key it accepted. Note that the header comment on `circuits/lib/claims/policy/src/lib.nr` says the identifier "is a public input", which does not match the shipped circuit; `prover/layout.manifest` records the nullifier public inputs as `commitment secret_binding domain context return[0]`. `policy::assert_supported` exists but is called by no circuit; the only callers are its own tests.
 
 ### 3.6 Document Signer trust
 
@@ -106,7 +106,7 @@ The off-chain verifier consumes this circuit; see section 4.1. What the circuit 
 
 Every binary circuit asserts its session context is set: `"sod: context must be set"` in both Passive Authentication variants, then `"dg_extract: context must be set"`, `"attributes: context must be set"`, `"predicate: context must be set"`, `"nullifier: context must be set"` and `"anchor: context must be set"`. The comment in `bin/sod/ecdsa_p256_sha256_ec512/src/main.nr` explains why a non-zero assertion rather than nothing: it "puts a real constraint on it, rather than leaving it an input the circuit never reads". Commit `c9a27c9` in the circuits repository records that both circuits at the time carried `assert(context == context)`, which the compiler removed, leaving the input in the ABI but unread.
 
-`context` deliberately enters no derived value. The header of `circuits/lib/commit/src/lib.nr` states the rule: `domain` enters every value a verifier stores or compares across sessions, `context` enters none, because mixing it in would change stored values every session.
+`context` deliberately enters no derived value. The header of `circuits/lib/core/commit/src/lib.nr` states the rule: `domain` enters every value a verifier stores or compares across sessions, `context` enters none, because mixing it in would change stored values every session.
 
 ## 4. What the bundle check constrains
 
@@ -160,7 +160,7 @@ The `anchor/dsc_inclusion` circuit exists, works, and can be demanded through `P
 
 An attacker who generates their own key, builds a Security Object over data of their choosing and signs it, exactly as `circuits/fixtures/generator` does, produces a bundle that such a `verify_bundle` call accepts and that carries entirely fabricated attributes. This is not a subtle attack; it is the default outcome of not asking for the anchor.
 
-With the anchor required, two gaps remain. The trust set is a Merkle root the verifier publishes, and the circuit assumes whoever built that set validated the certificates behind it. No code in this repository builds such a set. There is no circuit that verifies a Document Signer Certificate against a Country Signing Certificate Authority, so certificate validity periods, key usage, and revocation are outside the constraint system entirely. `README.md` lists `anchor/csca-chain` as intended; it does not exist. A `lib/x509` package with certificate parsing helpers exists in the working tree, uncommitted, and no circuit depends on it.
+With the anchor required, two gaps remain. The trust set is a Merkle root the verifier publishes, and the circuit assumes whoever built that set validated the certificates behind it. No code in this repository builds such a set. There is no circuit that verifies a Document Signer Certificate against a Country Signing Certificate Authority, so certificate validity periods, key usage, and revocation are outside the constraint system entirely. `README.md` lists `anchor/csca-chain` as intended; it does not exist. A `lib/core/x509` package with certificate parsing helpers exists in the working tree, uncommitted, and no circuit depends on it.
 
 ### 5.3 A relying party that does not run the verifier honestly
 
@@ -196,7 +196,7 @@ The nullifier is unique per document per domain, not per person. `nullifier::doc
 
 `policy::MRZ_STABLE_V1` and `policy::NATIONAL_IDENTIFIER_V1` are declared as constants but no circuit implements either, so no reissue-stable policy ships.
 
-An application must fix exactly one policy per domain. The header of `circuits/lib/policy/src/lib.nr` notes that accepting two policies within one domain "lets one holder present two different nullifiers, which defeats the uniqueness the nullifier exists to provide". Since the policy identifier is not a public input, enforcing this means accepting exactly one nullifier verification key per domain.
+An application must fix exactly one policy per domain. The header of `circuits/lib/claims/policy/src/lib.nr` notes that accepting two policies within one domain "lets one holder present two different nullifiers, which defeats the uniqueness the nullifier exists to provide". Since the policy identifier is not a public input, enforcing this means accepting exactly one nullifier verification key per domain.
 
 ### 5.8 Freshness, expiry and revocation
 
@@ -228,9 +228,9 @@ Certificate validity is established outside the circuits. Whoever assembles the 
 
 Nothing in this repository builds a witness from a document read off a chip. The fixture generator writes a `Prover.toml` for the elliptic curve Passive Authentication circuit from its own synthetic document, and nothing more, so the following are obligations on whatever builds witnesses for real documents.
 
-The signature `s` value must be normalized to `n - s` whenever it exceeds `n / 2`. The header of `circuits/lib/sig/src/lib.nr` explains that the ECDSA backend aborts rather than returning false for high `s`, that RFC 5280 and RFC 5480 place no such restriction so roughly half of genuine documents carry high `s`, and that the normalization is sound because verification accepts `(r, s)` exactly when it accepts `(r, n - s)`. That header also states plainly that "no such code exists yet: until it does, every caller has to normalize for itself." The fixture generator does normalize, and the header of `circuits/lib/testdata/src/lib.nr` records it, but that code serves the fixtures alone.
+The signature `s` value must be normalized to `n - s` whenever it exceeds `n / 2`. The header of `circuits/lib/core/sig/src/lib.nr` explains that the ECDSA backend aborts rather than returning false for high `s`, that RFC 5280 and RFC 5480 place no such restriction so roughly half of genuine documents carry high `s`, and that the normalization is sound because verification accepts `(r, s)` exactly when it accepts `(r, n - s)`. That header also states plainly that "no such code exists yet: until it does, every caller has to normalize for itself." The fixture generator does normalize, and the header of `circuits/lib/testdata/src/lib.nr` records it, but that code serves the fixtures alone.
 
-For the RSA variant the Barrett reduction parameter has to be supplied alongside the modulus. The header of `circuits/lib/rsa/src/lib.nr` records that a wrong hint cannot make a bad signature verify, because the bignum backend constrains every multiplication against it, so this is a liveness obligation rather than a soundness one.
+For the RSA variant the Barrett reduction parameter has to be supplied alongside the modulus. The header of `circuits/lib/core/rsa/src/lib.nr` records that a wrong hint cannot make a bad signature verify, because the bignum backend constrains every multiplication against it, so this is a liveness obligation rather than a soundness one.
 
 `session_salt` must be freshly sampled with real entropy per session, and `dsc_salt` must be chosen consistently with whatever trust check the deployment uses.
 
@@ -262,7 +262,7 @@ These numbers are relevant to the threat model in one respect. The signature che
 
 The gaps below are the ones a deployment must close before the system provides what its structure implies. They are stated as absent rather than planned.
 
-Trust anchoring is reachable but off by default, and it rests on a registry built outside the constraint system. `Policy::new` leaves `require_trust_anchor` false, and a policy that requires an anchor without naming a registry root accepts any root. No code in this repository builds a registry, and no circuit verifies a Document Signer Certificate against a Country Signing Certificate Authority. A `lib/x509` package with certificate parsing helpers exists in the circuits working tree, uncommitted, and no binary circuit depends on it.
+Trust anchoring is reachable but off by default, and it rests on a registry built outside the constraint system. `Policy::new` leaves `require_trust_anchor` false, and a policy that requires an anchor without naming a registry root accepts any root. No code in this repository builds a registry, and no circuit verifies a Document Signer Certificate against a Country Signing Certificate Authority. A `lib/core/x509` package with certificate parsing helpers exists in the circuits working tree, uncommitted, and no binary circuit depends on it.
 
 Chip liveness has no circuit. Active authentication is absent.
 
@@ -270,7 +270,7 @@ The verifier does not carry a statement of what the relying party asked of the d
 
 `Proof::verification_key_hash` is trusted rather than derived, which weakens the downgrade protection it exists to provide.
 
-Two Passive Authentication variants ship, both over a 512 byte Security Object: ECDSA over P-256 with SHA-256, and RSA-2048 PKCS#1 v1.5 with SHA-256. Other key sizes, other curves and other digests have no circuit. `circuits/lib/hash/src/lib.nr` states only SHA-256 ships. `circuits/lib/sig/src/lib.nr` carries P-384 and Brainpool P-384 wrappers that no circuit calls and no test vector exercises. `circuits/README.md` states TD2 is not implemented in `lib/mrz`.
+Two Passive Authentication variants ship, both over a 512 byte Security Object: ECDSA over P-256 with SHA-256, and RSA-2048 PKCS#1 v1.5 with SHA-256. Other key sizes, other curves and other digests have no circuit. `circuits/lib/core/hash/src/lib.nr` states only SHA-256 ships. `circuits/lib/core/sig/src/lib.nr` carries one entry point, for P-256. `circuits/README.md` states TD2 is not implemented in `lib/emrtd/mrz`.
 
 For the RSA variant, `dsc_commitment` and the document secret come from `modulus_hash` and `limbs_document_secret`, which fold every limb. An anchor registry holding RSA entries has to use the same helper for its leaves, and no inclusion circuit takes a modulus yet.
 
