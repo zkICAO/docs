@@ -5,18 +5,24 @@ on: push
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # The secrets context is not available to an if condition, so the token
+    # is lifted into the environment where one can test it.
+    env:
+      CIRCUITS_TOKEN: ${{ secrets.CIRCUITS_READ_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
         with:
           path: docs
 
       # The path check needs the code these documents describe. The circuits
-      # repository is private, so this needs a token that can read it; set
-      # CIRCUITS_READ_TOKEN to enable it. Without the secret the step is
+      # repository is private, so this needs a token that can read it. Set
+      # CIRCUITS_READ_TOKEN to enable it; without the secret the step is
       # skipped and the run says which checks it did not perform, rather
       # than reporting success over nothing.
       - name: check out the circuits repository
-        if: ${{ secrets.CIRCUITS_READ_TOKEN != '' }}
+        if: env.CIRCUITS_TOKEN != ''
         uses: actions/checkout@v4
         with:
           repository: zkICAO/circuits
