@@ -170,7 +170,9 @@ Both circuits also assert `context != 0`, with the message `attributes: context 
 
 ## What is not implemented
 
-Doc 9303 defines a third layout, TD2, of two lines of 36 characters. It is not implemented. `lib/emrtd/mrz` has no TD2 offsets, no `td2_validate` and no field count constants for it, `lib/emrtd/attributes` has no TD2 function, and there is no TD2 circuit; the only mention of TD2 anywhere in the repository is a line in `circuits/README.md` saying so. Adding it means a new set of offsets, a new validate function following the same check digit pattern, a new profile function and a new circuit instance. The identifier table above is intended to carry over unchanged.
+All three Doc 9303 layouts are implemented. TD2 is two lines of 36 characters, and the identifier table above carries over to it unchanged, which was the point of the table: the same nine identifiers, read at that layout's offsets, with the name field 31 characters rather than 39 and the optional data field 7 rather than 14. Its composite check digit runs over the lower line's fields, the shape TD3 uses, rather than across both lines as TD1's does.
+
+What remains unimplemented at the profile level is any data group other than DG1.
 
 Country specific data groups are opt-in enrichment on top of the machine readable zone core, and no profile for any of them is implemented. `lib/emrtd/attributes` covers DG1 only. The extraction layer below it is general in the sense that `lds::dg_entry_sha256` accepts a `dg_number` from 1 through 16, so a hash for another group can already be pulled out of the Security Object, but nothing parses the contents of such a group into fields. Any profile added there defines its own meaning for identifiers 10 through 16 and has to say so explicitly, because the predicate circuits accept those identifiers today and prove nothing about which profile produced the tree.
 

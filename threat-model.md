@@ -270,7 +270,7 @@ The verifier does not carry a statement of what the relying party asked of the d
 
 `Proof::verification_key_hash` is trusted rather than derived, which weakens the downgrade protection it exists to provide.
 
-Two Passive Authentication variants ship, both over a 512 byte Security Object: ECDSA over P-256 with SHA-256, and RSA-2048 PKCS#1 v1.5 with SHA-256. Other key sizes, other curves and other digests have no circuit. `circuits/lib/core/hash/src/lib.nr` states only SHA-256 ships. `circuits/lib/core/sig/src/lib.nr` carries one entry point, for P-256. `circuits/README.md` states TD2 is not implemented in `lib/emrtd/mrz`.
+Four Passive Authentication variants ship: ECDSA over P-256 and P-384, and RSA PKCS#1 v1.5 at 2048 and 4096 bits, all with SHA-256. Other digests have no circuit, and `circuits/lib/core/hash/src/lib.nr` states only SHA-256 ships. Brainpool curves have no wrapper. All three machine readable zone layouts are implemented.
 
 For the RSA variant, `dsc_commitment` and the document secret come from `modulus_hash` and `limbs_document_secret`, which fold every limb. An anchor registry holding RSA entries has to use the same helper for its leaves, and no inclusion circuit takes a modulus yet.
 

@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 17 circuits, 6 witness tools |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 20 circuits, 6 witness tools |
 | zkICAO/prover | `0c7e2f0` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
@@ -203,14 +203,17 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 
 | Circuit | ACIR opcodes |
 |---|---|
+| sod_ecdsa_p384_sha256_ec512 | 65850 |
 | sod_ecdsa_p256_sha256_ec1024 | 38034 |
 | sod_ecdsa_p256_sha256_ec512 | 35098 |
+| sod_rsa4096_v15_sha256_ec512 | 11093 |
 | sod_rsa2048_v15_sha256_ec1024 | 11036 |
 | sod_rsa2048_v15_sha256_ec512 | 8100 |
 | anchor_csca_chain_rsa2048_sha256_tbs512 | 6841 |
 | dg_extract_sha256_ec1024 | 6237 |
 | dg_extract_sha256_ec512 | 3301 |
 | attributes_mrz_td1_sha256 | 2449 |
+| attributes_mrz_td2_sha256 | 1773 |
 | attributes_mrz_td3_sha256 | 2103 |
 | anchor_dsc_inclusion | 340 |
 | predicate_member | 230 |
@@ -227,7 +230,9 @@ The registration circuit is a special case in this table: its 17 opcodes are alm
 
 The ratio is the argument. Against the extraction circuit, Passive Authentication costs about two and a half times as much in the RSA variant and about eleven times as much in the curve variant. Against the four circuits a verifier uses to ask a question, the curve variant costs between 154 and 627 times as much, and the RSA variant between 38 and 156 times. Asking one more question of a document that has already been authenticated costs between 56 and 228 opcodes.
 
-The two Passive Authentication figures are also worth reading against each other. RSA is four times cheaper than ECDSA here, which inverts the usual expectation, and the reason is recorded in commit `ae0a9c8`: verifying RSA with a small exponent is seventeen modular multiplications, while an ECDSA verification is two scalar multiplications over a curve whose field is not the proving field, so it pays for non native arithmetic throughout.
+The Passive Authentication figures are worth reading against each other. RSA is four times cheaper than ECDSA here, which inverts the usual expectation: verifying RSA with a small exponent is seventeen modular multiplications, while an ECDSA verification is two scalar multiplications over a curve whose field is not the proving field, so it pays for non native arithmetic throughout.
+
+The wider variants show how each grows. Doubling the RSA modulus costs about thirty seven percent, 8100 to 11093, because the work scales with the limb count rather than the exponent. Moving from P-256 to P-384 nearly doubles the cost, 35098 to 65850, because a wider field pays more non native arithmetic at every step. RSA-4096 remains six times cheaper than P-256.
 
 Commit `c9a27c9` recorded end to end numbers for the Passive Authentication circuit on the author's machine, at a time when that circuit had four public inputs rather than the five it has now: proving 1.9 seconds, proof 16000 bytes, public inputs 128 bytes for four field elements, verification key 3680 bytes. Those figures come from one machine and one revision and should be re-measured before being relied on.
 
@@ -336,11 +341,11 @@ What does not exist on this path: any deployment, any audit, and on chain sessio
 
 ## 7. What is not implemented
 
-Signature algorithms. Two variants exist, ECDSA over P-256 and RSA-2048 with PKCS#1 v1.5 and exponent 65537. Nothing else can be proved. RSA-3072 and RSA-4096 have no variant, RSA-PSS has no implementation at all, and the public exponent is fixed at 65537 in the arithmetic, so a key that uses any other exponent cannot be proved. `lib/core/sig` exposes one entry point, `verify_ecdsa_p256`; another curve means another wrapper beside it, added with the circuit variant that needs it.
+Signature algorithms. Four variants exist: ECDSA over P-256 and P-384, and RSA with PKCS#1 v1.5 at 2048 and 4096 bits. RSA-3072 has no variant, though the library is generic over the modulus width so one is an instantiation. RSA-PSS has no implementation at all, and the public exponent is fixed at 65537 in the arithmetic, so a key that uses any other exponent cannot be proved. Brainpool curves have no wrapper; the dependency supports them, and one belongs here alongside the circuit variant that needs it, not before.
 
-Digest algorithms. `lib/core/hash` exposes SHA-256 and nothing else. Documents whose CMS digest or data group hashes use any other algorithm are out of reach, and the variant naming has room for them but the packages do not exist.
+Digest algorithms. `lib/core/hash` exposes SHA-256 and nothing else, so a document whose CMS digest or data group hashes use SHA-384 or SHA-512, both of which Doc 9303 permits, is out of reach. The obstacle is a dependency rather than the design: `noir-lang/sha512` exists but publishes no tags, and every other dependency here is pinned by tag, so taking it would mean pinning to a moving branch or to a bare commit in a repository whose release discipline is not yet established. A wider digest also changes the Security Object entry width, from 39 bytes to 71, which moves the buffer boundary the variant names encode.
 
-Document layouts. `lib/emrtd/mrz` implements TD1 and TD3. Doc 9303 also defines TD2, which is not implemented. No profile exists for any data group other than DG1, so nothing reads a portrait, a state specific group such as DG13, or anything else, even though the extraction circuit will extract any data group number from 1 to 16.
+Document layouts. All three Doc 9303 layouts are implemented, TD1, TD2 and TD3, each with a profile committing the same nine field identifiers and a circuit. No profile exists for any data group other than DG1, so nothing reads a portrait, a state specific group such as DG13, or anything else, even though the extraction circuit will extract any data group number from 1 to 16.
 
 Trust. The chain mode verifies one link, an RSA-2048 country signing signature over an elliptic curve Document Signer certificate. It does not walk further, does not check revocation, does not read names or extensions, and cannot certify an RSA Document Signer key, so the RSA Passive Authentication variant has no chain anchor to pair with. Beyond that link the list of country signing keys is trusted input, which is unavoidable and is what a master list is.
 
