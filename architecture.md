@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 17 circuits, 5 witness tools |
+| zkICAO/circuits | the revision this document sits beside | 17 library packages, 17 circuits, 6 witness tools |
 | zkICAO/prover | `0c7e2f0` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
@@ -183,9 +183,17 @@ Private: the verification key and proof of one `predicate_compare` and one `pred
 
 The commitment, the domain and the context are single witnesses placed into both inner public input arrays, so the two predicates cannot be about different documents, applications or sessions and still prove. The statement values stay public: a verifier reads them off this proof exactly as off the bare predicates, and the returned commitment links against a registration the way a predicate's referenced commitment does. Nine ACIR opcodes; the inner verification key hashes come from the same generated `keys.nr` arrangement.
 
-### 2.9 tools/mrz_opening
+### 2.9 The witness tools
 
-`tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. It is executed to solve a witness and never proved: a proof would publish exactly what the commitment exists to hide. It sits outside `bin/` so it is not mistaken for a circuit.
+Six packages under `tools/`, executed to solve a witness and never proved. They sit outside `bin/` so they are not mistaken for circuits, and they exist for one reason: every value they produce is a Poseidon2 hash a circuit recomputes, so deriving them anywhere else would be a second implementation of the same hashing, and a divergence between the two would surface as an inclusion proof that fails for a key that really is in the set.
+
+`tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. Proving it would publish exactly what the commitment exists to hide.
+
+`tools/document_secret` derives the secret a nullifier proof holds, from the signature the Passive Authentication proof was made over.
+
+`tools/pubkey_leaf`, `tools/modulus_leaf` and `tools/set_entry_leaf` each return one leaf: an elliptic curve signer key for a registry, a country signing modulus for a master list, a packed value for a membership set. They reveal nothing, since a published tree is public by definition.
+
+`tools/merkle_path` assembles a tree over up to sixteen leaves and returns its root with the sibling path for one of them, at any depth from four to sixteen, so one tool serves the signer registry at depth sixteen, the master list at depth ten and a membership set at depth eight. Levels above the leaves are padded with the empty subtree convention of section 4, which is what makes a tree of four entries and a tree of sixteen the same construction. It is tested at every index at each of the three depths, forty eight paths, against the same `walk_path` the circuits use.
 
 ## 3. Why the signature check and the extraction are separate circuits
 
@@ -243,8 +251,11 @@ Every binding value, leaf format and salt convention lives in `lib/core/commit`,
 | `secret_binding` | H(12, secret, domain) | 12 |
 | `modulus_hash` | fold of H(accumulator, limb) from 9 | 9 |
 | internal node | H(left, right) | none |
+| empty subtree | 0 at the leaf, H(previous, previous) above | none |
 
 `entropy_seed` rejects a zero salt and `nullifier` rejects a zero secret; both are the only zero checks in the library.
+
+`empty_subtree` is the padding convention, and it has to be a convention rather than a choice per caller: a published root and a circuit that walks a path to it are only comparable if both padded the same way, and a registry of a few hundred entries in a depth sixteen tree is mostly padding. An absent leaf is zero, which is safe because every real leaf is a tagged hash of three inputs or more and no such hash is zero short of a preimage of it.
 
 `modulus_hash` folds the limbs through a chain of two wide hashes and then finishes with a three wide tagged hash over the tag, the limb count and the accumulator. The intermediate values of the fold have the shape of Merkle internal nodes, but they never leave the function; the published value is three wide and tagged, so the width rule separates it from internal nodes, and hashing the limb count separates an 18 limb modulus from any other width. It shares `TAG_DSC_KEY` with `pubkey_hash`, which is five wide, and Poseidon2 separates the two by input length. An earlier revision finished the fold with a two wide hash, which broke the shape rule this paragraph used to flag.
 
@@ -277,7 +288,7 @@ Variants that exist today:
 | `registration/mrz_td3_ecdsa_p256_sha256_ec512_csca_chain` | the same set with the chain anchor, date tied to the attributes |
 | `session/compare_member` | two predicates of a session as one proof |
 
-Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of ten are likewise fixed in the circuit and absent from the name. If a second size of either is ever needed, the naming scheme has to grow before the package does.
+Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of ten are likewise fixed in the circuit and absent from the name. Depth is part of what a root means: the same leaves published at two depths produce two roots, which `tools/merkle_path` has a test for. If a second size of either is ever needed, the naming scheme has to grow before the package does.
 
 A relying party pins the variant by verification key. `Policy::accepted_keys` in the prover maps a circuit kind to the key hashes it accepts, and a proof from any other variant is rejected before its public values are looked at. This is what prevents an algorithm downgrade, and it is also the only thing that distinguishes a TD3 attribute proof from a TD1 one, since the two share an ABI and a circuit kind in the verifier.
 
@@ -339,6 +350,8 @@ On-chain deployment. The reference registry, its verifiers and its tests exist a
 
 Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/emrtd/lds`, `lib/emrtd/cms`, `lib/emrtd/attributes` and `lib/core/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. Witness preparation does not exist as code: `lib/core/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove. The noir_rs pin in `TOOLCHAIN.md` is recorded as intended and is not exercised; the Barretenberg pin is exercised, by the bundle command that proves and verifies every circuit and by the keys subcommand that writes the pinned verification key hashes.
 
+Real trust material. The trees the bundle builds are real trees over real keys, sixteen country codes in the membership set, four signer keys in the registry and two country signing keys in the master list, but the keys are generated here rather than read from the ICAO Public Key Directory. Ingesting a published master list needs certificate parsing that does not exist, section 7 above.
+
 Real documents. Every fixture in `lib/testdata` is generated by `fixtures/generator`, which builds synthetic Doc 9303 material over the specimen machine readable zones from the standard: DG1, a Security Object, CMS signed attributes, a signature under a generated Document Signer key, and a Document Signer certificate signed by a generated country signing key. No test in either repository runs against a document issued by a state.
 
 The repository was bootstrapped on 2026-07-23 and the pinned revision is from 2026-07-26, so the whole set above is three days of work and is still growing. Three gaps this document originally listed as absent, RSA Passive Authentication, country signing certificate verification and recursive aggregation, were filled while it was being maintained. Re-read the inventory against the revision you are auditing.
@@ -363,7 +376,7 @@ Compute `document_secret` from the same normalized signature the Passive Authent
 
 ## 9. State of the test suite
 
-Re-run at this revision: `nargo test` reports 114 tests passing across the 39 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 21 unit tests, one documentation test, and 25 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms, the session entry point and the aggregated session. The contracts repository runs 8 forge tests over the same real proofs, including the measured registration. The recursive circuits have no `#[test]`, because recursion cannot be exercised without the backend; their coverage is the bundle command, which proves and verifies every one of them, and the adversarial witnesses recorded in commit `b43d83b`.
+Re-run at this revision: `nargo test` reports 122 tests passing across the 41 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 21 unit tests, one documentation test, and 25 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms, the session entry point and the aggregated session. The contracts repository runs 8 forge tests over the same real proofs, including the measured registration. The recursive circuits have no `#[test]`, because recursion cannot be exercised without the backend; their coverage is the bundle command, which proves and verifies every one of them, and the adversarial witnesses recorded in commit `b43d83b`.
 
 The circuit tests cover both layouts end to end and rejections for a swapped signature, swapped signed attributes, a signature over another Security Object with the digest link repaired, a Security Object that was not the authenticated one, an entry read as the wrong data group, a card layout read as a passport, an opening from another document, a field claimed under another identifier, a value outside a published set, a disclosure that does not match, a secret the prover invented, openings supplied in the wrong order, a signer outside the published set, a tampered certificate, an expired certificate, an authority outside the published list, and an unset session context. That last case is tested in four circuits of the eleven, `attributes_mrz_td3_sha256`, `predicate_compare`, `anchor_dsc_inclusion` and `anchor_csca_chain_rsa2048_sha256_tbs512`, although all eleven contain the assertion.
 
