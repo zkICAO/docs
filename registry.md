@@ -1,20 +1,34 @@
 # Trust registry
 
-## Status
+## What this document is, and what zkICAO does not do
 
-Mode one is implemented. Mode two is not.
+A relying party that wants to know a document was signed by a state has to decide which signing keys it trusts. zkICAO does not make that decision, does not distribute the data behind it, and does not host anything. It is infrastructure: it defines the format a trust set takes, ships the tools that build one, and provides two circuits that prove membership in it. Obtaining the certificates, deciding which to accept, and publishing the result are the relying party's, and a project that did those things for them would be a service with an operator, a liveness dependency and a party to trust.
 
-This document was checked against the circuits working tree at commit `ae0a9c8` and the prover repository at `204d352`. The tree is moving quickly, so treat every count and every measurement below as a snapshot rather than a standing fact, and re-check before relying on one.
+That boundary is the reason the anchor stage is optional and the root is a parameter rather than a constant. Two relying parties can accept different states, different modes and different roots while running the same circuits.
 
-`circuits/bin` holds ten circuit packages at that commit: two Passive Authentication variants (`sod/ecdsa_p256_sha256_ec512` and `sod/rsa2048_v15_sha256_ec512`), data group extraction, two attribute profiles, three predicates, one nullifier and one anchor. The workspace `Nargo.toml` lists `lib/trust/anchor` and `bin/anchor/dsc_inclusion` among its members.
+Both modes are implemented. `bin/anchor/dsc_inclusion` proves the signer key is a leaf of a published tree, and `bin/anchor/csca_chain_rsa2048_sha256_tbs512` verifies the country signing signature over the signer certificate in circuit and proves the authority is a leaf of a published master list. `bin/registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion` and its `csca_chain` sibling aggregate either one into a registration proof.
 
-`circuits/lib/trust/anchor/src/lib.nr` defines `prove_signer_is_trusted`, which derives a key hash, walks a Merkle path against a root and returns a `dsc_commitment`. `bin/anchor/dsc_inclusion/src/main.nr` wraps it, adds the scoping asserts and publishes the commitment. Both were committed in `613231b`, "feat: trust anchor by inclusion in a published set of signers". Running `nargo test` during this review passed the library's four tests and the circuit's three.
+Counts and measurements in this document are snapshots. Check them against the revision you are reading.
 
-Both stale claims this section used to flag, a README saying no circuit existed and a toolchain note saying RSA was unimplemented, have since been corrected in the circuits repository.
+## Building the set: what a relying party does
 
-Work on the chain mode was in the working tree, uncommitted, while this review ran: an `lib/core/x509` package, certificate fixtures in `lib/testdata`, a `commit::modulus_hash`, and a `prove_signer_is_certified` in `lib/trust/anchor`. None of it is committed, none of it has a circuit package, and none of it is described below as existing. It is mentioned once, in the open questions, because it changes what the remaining gaps are.
+Nothing in this pipeline is run by zkICAO. Every step is the relying party's, and the tools that matter are here so that the hashing is the same hashing the circuits recompute.
 
-Names, leaf layout, public input order and the choice of modes can still change.
+1. Obtain the certificates. The ICAO Public Key Directory publishes master lists of country signing certificates to its participants, and access is arranged through participation rather than being open. Some states publish their own master lists directly, which is the fallback for states outside the directory and a cross check for those inside it. Doc 9303 also provides for the signer certificate to travel in the Security Object's SignedData, so documents themselves are a third source, useful for measuring coverage rather than for trust: a certificate taken from a document is evidence only once it chains to an authority already trusted.
+
+2. Verify them outside the circuit. Chain every Document Signer Certificate to its country signing certificate with a standard X.509 verifier, including validity dates and whatever revocation data the state publishes. No circuit here does this, and the inclusion mode assumes it was done.
+
+3. Drop what the leaf derivation cannot encode, and record every drop. `commit::pubkey_hash` takes an elliptic curve coordinate pair, and `bin/anchor/dsc_inclusion` instantiates it at 32 bytes, so an RSA signer key has a leaf derivation in `commit::modulus_hash` but no inclusion circuit that consumes it.
+
+4. Derive a leaf per accepted entry with `tools/pubkey_leaf` for signer keys or `tools/modulus_leaf` for country signing moduli, and build the tree with `tools/merkle_path`, which pads to the depth the circuit takes using the empty subtree convention. Deriving them any other way is a second implementation of the same hashing, and a divergence shows up as an inclusion proof that fails for a key that really is in the set.
+
+5. Publish the root, the depth, the epoch and the whole leaf list.
+
+6. Publish what was excluded and why.
+
+Step five is a privacy requirement rather than a convenience. A holder needs the whole set to build a path locally. If paths are served by an API keyed by signer, the operator of that API learns which signer produced each document, which is exactly what the salted commitment hides from the verifier.
+
+The one part of this the tools do not do is the certificate parsing in steps one to three. `lib/core/x509` reads fields at offsets it is given, for use inside a circuit; it is not a general X.509 parser and a build pipeline needs a real one.
 
 ## Why a Document Signer needs an anchor
 
@@ -147,25 +161,6 @@ The default should be inclusion. The chain mode is for deployments that will not
 
 A third option: fold the anchor into the Passive Authentication circuit instead of composing with it. That removes the salt and the commitment equality check, which is the part of the composition an auditor has to reason about, at the cost of one circuit and one verification key per combination of algorithm, buffer size and registry depth rather than per algorithm and buffer size. The reason for splitting circuits is that the signature check dominates and everything downstream costs two or three orders of magnitude less. It argues for keeping the anchor separate: a registry depth change recompiles only the cheap circuit, and a deployment that runs no anchor simply omits the proof.
 
-## Where the data comes from
-
-The statements in this section come from outside the repository and nothing here verifies them.
-
-The ICAO Public Key Directory is understood to publish master lists of country signing certificates, and Document Signer lists, to its participants. Access is arranged through participation rather than being open, so a deployment has to obtain it. Some states publish their own master lists directly, which is the fallback for states that are not in the directory and the cross check for those that are.
-
-Documents themselves are a third source. Doc 9303 provides for the Document Signer Certificate to be carried in the certificates field of the Security Object's SignedData, so a deployment can collect signer certificates from documents it processes. That gives no trust on its own. A certificate taken from a document becomes evidence only once it chains to a CSCA the deployment already trusts, so this is useful for measuring the coverage of a master list, not as a source of trust.
-
-The build pipeline below is not implemented. No registry tooling exists in this repository: the only Rust in `circuits` is the fixture generator, which builds synthetic documents and nothing else.
-
-1. Fetch the master lists and signer lists.
-2. Verify every Document Signer Certificate against its CSCA with a standard X.509 verifier outside the circuit, including validity dates and whatever revocation data the state publishes.
-3. Drop entries whose key type the leaf derivation cannot encode, and record every drop. At the committed state that means everything except elliptic curve keys with coordinates of at most 62 bytes, and the shipped circuit narrows it further to 32 byte coordinates.
-4. Derive the leaf per accepted entry, pad to `2^D` with zero, and compute the root with `hash_pair`. For the shipped circuit that is `pubkey_hash` at depth sixteen.
-5. Publish the root, the epoch, the depth and the full leaf list.
-6. Publish what was excluded and why.
-
-Step five is a privacy requirement, not a convenience. A holder needs the whole set to build a path locally. If paths are served by an API keyed by signer, the operator of that API learns which signer produced the document, which is precisely what the salted commitment hides from the verifier.
-
 ## Coverage, and why the stage is optional
 
 Not every state participates in the Public Key Directory. A document from a state that does not participate cannot be anchored from directory data, and if that state publishes nothing of its own, it cannot be anchored at all without a bilateral arrangement.
@@ -184,7 +179,7 @@ The registry is the part of zkICAO whose quality depends on data the project doe
 
 ## Open questions
 
-Nothing constrains the salt. `dsc_commitment` accepts zero, both Passive Authentication variants pass `dsc_salt` through untouched, and `bin/anchor/dsc_inclusion` passes `salt` through untouched. Until an assert lands in the circuits and witness preparation draws the value fresh per session, the hiding property the composition is built on rests on a convention in a comment.
+Nothing constrains the salt, and nothing can: zero is a legitimate value, meaning the public registry convention where the verifier compares against a table it precomputed. So whether the signer stays hidden rests on the prover drawing a fresh salt, which is a caller obligation the input templates state and no circuit can enforce.
 
 The shipped leaf is a bare key hash, so the registry carries no issuing state and no validity window, and nothing in circuit checks either. Adding them changes the leaf derivation, the depth and the verification key.
 
@@ -196,7 +191,7 @@ Non membership would let a revoked signer be excluded without republishing a roo
 
 Tracing an entry back to the certificate it came from during an audit would want a serial number or a fingerprint in the leaf. `set_entry` takes exactly four field elements, so adding a fifth value means giving one up or nesting a hash inside a slot.
 
-Chain mode work was in progress in the working tree during this review and is not described above as existing. Anyone picking this document up should re-read `lib/trust/anchor`, `lib/core/x509` and `bin/anchor` before assuming the gaps listed here are still open.
+The chain mode ships now, so the gap it used to leave is closed for one link: an RSA-2048 country signing signature over an elliptic curve signer certificate, with the certificate's validity checked against a date the verifier pins. It does not walk further, read names or extensions, or check revocation.
 
 ## Affiliation
 
