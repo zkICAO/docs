@@ -1,0 +1,33 @@
+name: ci
+
+on: push
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: docs
+
+      # The path check needs the code these documents describe. The circuits
+      # repository is private, so this needs a token that can read it; set
+      # CIRCUITS_READ_TOKEN to enable it. Without the secret the step is
+      # skipped and the run says which checks it did not perform, rather
+      # than reporting success over nothing.
+      - name: check out the circuits repository
+        if: ${{ secrets.CIRCUITS_READ_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: zkICAO/circuits
+          token: ${{ secrets.CIRCUITS_READ_TOKEN }}
+          path: circuits
+
+      - name: check the documents against the code
+        working-directory: docs
+        run: |
+          if [ -f ../circuits/Nargo.toml ]; then
+            python3 tools/check.py ../circuits
+          else
+            python3 tools/check.py
+          fi
