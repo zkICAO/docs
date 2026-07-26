@@ -6,7 +6,7 @@ This describes the circuit set as it exists in code, not a design that is planne
 
 | Repository | Revision | Contents |
 |---|---|---|
-| zkICAO/circuits | the revision this document sits beside | 17 library packages, 20 circuits, 6 witness tools |
+| zkICAO/circuits | the revision this document sits beside | 18 library packages, 23 circuits, 8 witness tools |
 | zkICAO/prover | `0c7e2f0` | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
@@ -219,6 +219,7 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 | predicate_member | 230 |
 | predicate_compare | 123 |
 | predicate_reveal | 100 |
+| chip_active_p256_sha256 | 31262 |
 | nullifier_document_number | 58 |
 | registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion | 17 |
 | registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain | 17 |
@@ -341,7 +342,7 @@ What does not exist on this path: any deployment, any audit, and on chain sessio
 
 ## 7. What is not implemented
 
-Signature algorithms. Four variants exist: ECDSA over P-256 and P-384, and RSA with PKCS#1 v1.5 at 2048 and 4096 bits. RSA-3072 has no variant, though the library is generic over the modulus width so one is an instantiation. RSA-PSS has no implementation at all, and the public exponent is fixed at 65537 in the arithmetic, so a key that uses any other exponent cannot be proved. Brainpool curves have no wrapper; the dependency supports them, and one belongs here alongside the circuit variant that needs it, not before.
+Signature algorithms. Six variants exist: ECDSA over P-256, P-384 and Brainpool P-384r1, and RSA with PKCS#1 v1.5 at 2048, 3072 and 4096 bits. RSA-PSS has no implementation, and the public exponent is fixed at 65537 in the arithmetic, so a key using any other exponent cannot be proved.
 
 Digest algorithms. `lib/core/hash` exposes SHA-256 and nothing else, so a document whose CMS digest or data group hashes use SHA-384 or SHA-512, both of which Doc 9303 permits, is out of reach. The obstacle is a dependency rather than the design: `noir-lang/sha512` exists but publishes no tags, and every other dependency here is pinned by tag, so taking it would mean pinning to a moving branch or to a bare commit in a repository whose release discipline is not yet established. A wider digest also changes the Security Object entry width, from 39 bytes to 71, which moves the buffer boundary the variant names encode.
 
@@ -349,7 +350,9 @@ Document layouts. All three Doc 9303 layouts are implemented, TD1, TD2 and TD3, 
 
 Trust. The chain mode verifies one link, an RSA-2048 country signing signature over an elliptic curve Document Signer certificate. It does not walk further, does not check revocation, does not read names or extensions, and cannot certify an RSA Document Signer key, so the RSA Passive Authentication variant has no chain anchor to pair with. Beyond that link the list of country signing keys is trusted input, which is unavoidable and is what a master list is.
 
-Chip presence. Nothing here proves a document was read from a genuine live chip. There is no Active Authentication or Chip Authentication circuit, and no equivalent. Every proof is over data a holder supplies, so a copy of a chip's data produces proofs indistinguishable from the original. This is a property of Passive Authentication, and the system inherits it.
+Chip presence, partly. `bin/chip/active_p256_sha256` proves Active Authentication for a chip whose key is an elliptic curve one: the chip signs a challenge with the private key behind DG15, which a copy of the data cannot do because it does not have that key. The challenge is the session context, so an answer kept from an earlier exchange fails. Chip Authentication, the Diffie Hellman variant of Part 11, is not implemented, and neither is Active Authentication for RSA keys, which use ISO 9796-2 with SHA-1 and would need a digest this repository does not carry. A relay, a terminal forwarding a challenge to a genuine chip elsewhere, is ruled out by nothing here and cannot be: that is a distance bound and a property of the reader's radio.
+
+Without a chip proof, every other statement is over data a holder supplies, so a copy produces proofs indistinguishable from the original. That is a property of Passive Authentication and the system inherits it.
 
 On-chain deployment. The reference registry, its verifiers and its tests exist and pass, section 6.2; no network has them, and no audit has looked at them. Session questions on chain do not exist. Predicate aggregation covers the compare and member pair; other compositions are added as they are needed.
 
