@@ -2,7 +2,7 @@
 
 A profile is the code that turns one data group of an ICAO Doc 9303 document into a commitment over its individual fields. It fixes three things: which bytes of the data group each field occupies, how those bytes become a canonical value, and which numeric identifier each field carries. Everything above the profile (range checks, set membership, disclosure, nullifiers) speaks in terms of those identifiers and that commitment, with the nullifier circuit additionally taking a document secret and the binding to it that the Passive Authentication circuit published. The profile is the single place where a document layout is interpreted.
 
-Two profiles exist, both over DG1: `attributes::td3` for the passport layout and `attributes::td1` for the card layout, in `lib/emrtd/attributes/src/lib.nr`. They are instantiated by the circuits `bin/attributes/mrz_td3_sha256` and `bin/attributes/mrz_td1_sha256`.
+Three profiles exist, all over DG1: `attributes::td3` for the passport layout, `attributes::td2` for the smaller official travel document, and `attributes::td1` for the card layout, in `lib/emrtd/attributes/src/lib.nr`. They are instantiated by the circuits `bin/attributes/mrz_td3_sha256`, `bin/attributes/mrz_td2_sha256` and `bin/attributes/mrz_td1_sha256`.
 
 ## Why the machine readable zone is the portable core
 
@@ -172,12 +172,12 @@ Both circuits also assert `context != 0`, with the message `attributes: context 
 
 All three Doc 9303 layouts are implemented. TD2 is two lines of 36 characters, and the identifier table above carries over to it unchanged, which was the point of the table: the same nine identifiers, read at that layout's offsets, with the name field 31 characters rather than 39 and the optional data field 7 rather than 14. Its composite check digit runs over the lower line's fields, the shape TD3 uses, rather than across both lines as TD1's does.
 
-What remains unimplemented at the profile level is any data group other than DG1.
+What remains unimplemented at the profile level is any data group other than DG1. The chip circuit reads the public key out of DG15, but that is an extraction for a signature check, not a profile: no field of DG15 is committed.
 
 Country specific data groups are opt-in enrichment on top of the machine readable zone core, and no profile for any of them is implemented. `lib/emrtd/attributes` covers DG1 only. The extraction layer below it is general in the sense that `lds::dg_entry_sha256` accepts a `dg_number` from 1 through 16, so a hash for another group can already be pulled out of the Security Object, but nothing parses the contents of such a group into fields. Any profile added there defines its own meaning for identifiers 10 through 16 and has to say so explicitly, because the predicate circuits accept those identifiers today and prove nothing about which profile produced the tree.
 
 ## Measured sizes
 
-The attribute circuits are the cheapest part of the chain after the predicates; Opcode counts are in `architecture.md`, which is the only place they are recorded.
+The attribute circuits are the cheapest part of the chain after the predicates; opcode counts are recorded in `architecture.md` and re-measured there per revision.
 
 Nothing in the repository breaks those counts down by component, so the difference between the two profiles is not attributed here. The two layouts differ in that TD1 carries 90 characters against 88 and a 50 byte composite check digit input against 39.

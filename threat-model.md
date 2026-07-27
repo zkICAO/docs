@@ -1,20 +1,18 @@
 # Threat model
 
-This chapter states what the zkICAO circuits and the off-chain verifier defend against, what they leave to the parties around them, and what they do not address at all. It describes the code as it exists in `circuits/lib`, `circuits/bin` and `prover/src/verify.rs`. Where a protection is claimed here, a constraint in that code enforces it, and the assertion message is quoted so a reader can find it.
+This chapter states what the zkICAO circuits, the off chain verifier and the reference contract defend against, what they leave to the parties around them, and what they do not address at all. It describes the code as it exists across the organization's repositories. Where a protection is claimed here, a constraint in the code enforces it, and the assertion message or failure variant is quoted so a reader can find it.
 
-The code moves quickly, so this chapter is pinned to a state: circuits commit `ae0a9c8`, with an uncommitted `lib/core/x509` package in the working tree, and prover commit `204d352`, with a regenerated `layout.manifest` in the working tree. Claims below were checked against exactly that state. `nargo test` passes on the whole circuits workspace under the pinned toolchain, and `cargo test` in the prover crate passes twelve tests plus one doc test.
+The code moves quickly, so this chapter is revised with the code rather than pinned to a commit: every claim below was checked against the trees that the revision introducing it shipped with, and a claim that stops being true is a defect in this document. The paths named here are checked mechanically by this repository's own checker against a circuits checkout; the behavioral claims are not, which is why each quotes the string that a search of the code finds.
 
 zkICAO is an independent project. It is not affiliated with, endorsed by, or certified by ICAO or any government.
 
 ## 1. Scope
 
-In scope: the ten circuits under `circuits/bin` (`sod/ecdsa_p256_sha256_ec512`, `sod/rsa2048_v15_sha256_ec512`, `dg_extract/sha256_ec512`, `attributes/mrz_td3_sha256`, `attributes/mrz_td1_sha256`, `predicate/compare`, `predicate/member`, `predicate/reveal`, `nullifier/document_number`, `anchor/dsc_inclusion`), the libraries they are built from, and `verify_bundle` in `prover/src/verify.rs`.
+In scope: the circuits workspace (the libraries under `circuits/lib` and every binary under `circuits/bin`, currently twenty three instantiations across Passive Authentication, data group extraction, attribute commitment, predicates, nullifier, trust anchoring, chip presence, recursive registration and recursive session aggregation), the Groth16 mirror of the predicate layer under `circuits/groth16`, the off chain bundle verifier in `prover/src/verify.rs`, and the reference registry contract in `contracts/src/ZkIcaoRegistry.sol` with the verifiers it calls.
 
-Out of scope, because no code for it exists in this repository: reading the chip, building witnesses from a document that was read, transporting proofs, on-chain verification, and any credential or aggregation layer. The `README.md` design sketch lists `anchor/csca-chain` and `credential` as intended components; neither is implemented. A `lib/core/x509` package with certificate parsing helpers sits in the circuits working tree, uncommitted, and no binary circuit depends on it, so nothing in the proving flow reads a certificate.
+Out of scope, because no code for it exists in these repositories: reading a chip over a radio, building witnesses from a genuine document, transporting proofs between parties, wallet software and any consent interface, and custody of the holder's secrets between sessions.
 
-Every library that ships has a circuit that uses it. Entry points without a circuit behind them, two unused curve wrappers and a country code packer among them, were removed rather than left as untested code paths in a cryptographic library.
-
-Maturity matters to how this document should be read. Every end-to-end test runs against synthetic documents produced by `circuits/fixtures/generator`, which generates its own Document Signer keys through the openssl command line tool and signs the Doc 9303 specimen machine readable zones. The header of `circuits/fixtures/generator/src/main.rs` says so directly: "No genuine document is involved, and regenerating produces a fresh key, so the committed output is the fixture of record." No genuine issued document has been exercised through this pipeline.
+Maturity matters to how this document should be read. Every end to end test runs against synthetic documents produced by `circuits/fixtures/generator`, which generates its own Document Signer keys through the openssl command line tool and signs the Doc 9303 specimen machine readable zones. No genuine issued document has been exercised through this pipeline, and no third party security audit has taken place.
 
 ## 2. The attacker
 
@@ -26,21 +24,21 @@ A complete copy of the data page. That means the full machine readable zone, cha
 
 Unlimited observation of proofs. Every public input of every proof, from this holder and from every other holder, across sessions and across relying parties, is visible. Public inputs are enumerated per circuit in `prover/layout.manifest`.
 
-Operation of a relying party. The attacker can stand up a verifier, choose the `domain` and `context` it issues, choose `set_root`, `minimum`, `maximum`, `field_id`, `dg_number`, `registry_root` and `current_yyyymmdd`, and record every proof presented to it.
+Operation of a relying party. The attacker can stand up a verifier, choose the `domain` and `context` it issues, choose `set_root`, `minimum`, `maximum`, `field_id`, `dg_number`, `registry_root` and `current_yyyymmdd`, and record every proof presented to it. On a chain, the attacker can operate any number of accounts and call `register` with any calldata.
 
-Arbitrary witnesses. Every private input to every circuit is under the attacker's control, bounded only by the constraints. This includes `econtent`, `signed_attrs`, `digest_offset`, `oid_offset`, `dg_offset`, `pubkey_x`, `pubkey_y`, `signature_r`, `signature_s`, `modulus_limbs`, `redc_limbs`, `signature_limbs`, `dsc_salt`, `session_salt`, `dg1`, all Merkle `siblings`, `index`, `set_index`, `entropy`, `salt` and `secret`.
+Arbitrary witnesses. Every private input to every circuit is under the attacker's control, bounded only by the constraints. This includes every buffer, every offset, every limb, every Merkle sibling, every salt and the claimed secret. It includes presenting a genuine signature in its non canonical high `s` form, which section 3.1 addresses.
 
-Their own signing keys. The attacker can generate a P-256 or RSA key pair, build a well formed Security Object and CMS signed attributes over data of their choosing, and sign them. Nothing prevents this, and the fixture generator demonstrates it costs nothing.
+Their own signing keys. The attacker can generate elliptic curve or RSA key pairs, build a well formed Security Object and CMS signed attributes over data of their choosing, and sign them. Nothing prevents this, and the fixture generator demonstrates it costs nothing.
 
 ### 2.2 What the attacker cannot do
 
-The attacker cannot find SHA-256 collisions or preimages, cannot find Poseidon2 collisions or preimages, cannot forge ECDSA signatures over P-256 or RSA PKCS#1 v1.5 signatures without the private key, and cannot produce an accepting UltraHonk proof for a false statement.
+The attacker cannot find SHA-256 collisions or preimages, cannot find Poseidon2 collisions or preimages, cannot forge ECDSA or RSA signatures without the private key, and cannot produce an accepting UltraHonk or Groth16 proof for a statement the constraint system rejects.
 
-The attacker does not hold the private key of a genuine Document Signer.
+The attacker does not hold the private key of a genuine Document Signer or Country Signing Certification Authority.
 
-The attacker does not control the holder's proving device. Compromise of that device is a separate failure discussed in section 5.9.
+The attacker does not control the holder's proving device. Compromise of that device is a separate failure discussed in section 7.
 
-Physical possession of the chip is deliberately left open. Whether the attacker has it is the line that separates several of the protections below from several of the gaps.
+Physical possession of the chip is deliberately left open. Whether the attacker has it is the line that separates several of the protections below from several of the gaps, and section 3.7 is about moving that line.
 
 ## 3. What the circuits constrain
 
@@ -48,234 +46,146 @@ Physical possession of the chip is deliberately left open. Whether the attacker 
 
 The chain has three links. `sod::link` checks the first two and the variant circuit checks the third. The Security Object content is hashed with `hash::sha256_bounded`. The messageDigest signed attribute is located and read by `cms::message_digest_sha256`, which refuses an attribute that is not messageDigest (`"cms: attribute is not messageDigest"`), a value that is not a 32 byte octet string (`"cms: digest is not an OCTET STRING"`, `"cms: digest is not 32 bytes"`), a set header that is absent (`"cms: attribute values are not a SET"`), an offset too small to hold the header (`"cms: digest offset too small"`), and a digest running past the declared length (`"cms: digest runs past the signed attributes"`). The two are then compared byte by byte, failing with `"sod: security object digest does not match the signed attribute"`. The signature is then checked over the hash of the signed attributes.
 
-The consequence is that a modified Security Object cannot be presented. A single flipped bit anywhere in `econtent` changes its SHA-256, which no longer matches the signed messageDigest. The test `sod::rejects_a_tampered_security_object` flips one bit inside the DG1 hash entry and confirms the failure.
+The offsets into the signed attributes and the Security Object are supplied by the prover, and their flexibility buys the attacker nothing: every byte window they can point at lies inside data fixed by the issuer's signature, so making a chosen digest appear at one of them is a preimage problem, not a parsing problem.
 
-Two signature variants ship, both over a Security Object buffer of 512 bytes.
+Eight signature variants ship: ECDSA over P-256 (with Security Object buffers of 512 and 1024 bytes), P-384 and Brainpool P-384r1, and RSA PKCS#1 v1.5 at 2048 (both buffer sizes), 3072 and 4096 bits, all over SHA-256. Each calls the matching wrapper in `lib/core/sig` or `lib/core/rsa`.
 
-`sod/ecdsa_p256_sha256_ec512` calls `sig::verify_ecdsa_p256`, which fails with `"sig: ecdsa p256 verification failed"`. It also calls `validate_in_field()` on the decoded key coordinates and signature scalars, because, as the header of `circuits/lib/core/sig/src/lib.nr` records, byte deserialization in noir-bignum enforces only that a value is below `2^MOD_BITS`, not that it is reduced.
+The elliptic curve wrappers call `validate_in_field()` on the decoded coordinates and scalars, because byte deserialization in noir-bignum enforces only that a value is below `2^MOD_BITS`, not that it is reduced. The ECDSA backend additionally rejects any signature whose `s` exceeds `n/2` rather than returning false. That rejection carries a load beyond hygiene: the document secret of section 3.5 is derived from the signature bytes, and ECDSA accepts `(r, s)` exactly when it accepts `(r, n - s)`, so if both forms verified, one document would yield two secrets and therefore two nullifiers per application. With high `s` rejected, exactly one form satisfies the circuit, and the header of `lib/core/sig` records both the rule and the witness preparation obligation it creates.
 
-`sod/rsa2048_v15_sha256_ec512` calls `rsa::verify_pkcs1_v15_sha256`, which recovers the encoded message by raising the signature to 65537 and then constrains every byte of it: the leading zero (`"rsa: encoded message must start with zero"`), the block type (`"rsa: wrong block type"`), the whole padding run (`"rsa: padding must be all ones"`), the separator (`"rsa: missing padding separator"`), the SHA-256 digest info (`"rsa: digest info does not describe sha-256"`) and the digest itself (`"rsa: digest does not match"`). Constraining the full padding run is what stops a forger placing the digest info at another offset. Only the exponent 65537 is implemented, so a key with any other exponent cannot be verified here at all.
+The RSA path recovers the encoded message by raising the signature to 65537 and then constrains every byte of it: the leading zero (`"rsa: encoded message must start with zero"`), the block type (`"rsa: wrong block type"`), the whole padding run (`"rsa: padding must be all ones"`), the separator (`"rsa: missing padding separator"`), the SHA-256 digest info (`"rsa: digest info does not describe sha-256"`) and the digest itself (`"rsa: digest does not match"`). Constraining the full padding run is what stops a forger placing the digest info at another offset. Only the exponent 65537 is implemented, so a key with any other exponent must be rejected rather than silently verified against the wrong arithmetic. RSA signatures are unique per message and key, so the canonical form question ECDSA raises does not arise.
 
-Both variants publish three values: `econtent_binding`, `dsc_commitment` and `secret_binding`. The Document Signer public key itself stays private.
-
-The RSA variant derives its commitments with `commit::modulus_hash` and `commit::limbs_document_secret`, which fold every limb, so the signer key commitment and the document secret are functions of the whole modulus and the whole signature. An earlier revision kept three bytes of each limb, covering 432 bits of 2048; that was corrected in `98d7611` and is recorded here because anyone reading an older tree would meet it. An anchor registry holding RSA entries has to build leaves with the same helper.
+Every variant publishes three values: `econtent_binding`, `dsc_commitment` and `secret_binding`. The Document Signer public key itself stays private. The RSA variants derive their commitments with `commit::modulus_hash` and `commit::limbs_document_secret`, which fold every limb, so the signer key commitment and the document secret are functions of the whole modulus and the whole signature.
 
 ### 3.2 Data group extraction
 
-`dg_extract::extract_sha256` re-hashes the Security Object and requires the result to reproduce the binding the Passive Authentication proof published, failing with `"dg_extract: security object does not match the authenticated one"`. It then asserts the SHA-256 algorithm identifier is present (`"lds: wrong hash algorithm oid"`) and reads one entry through `lds::dg_entry_sha256`, which checks the DER header shape (`"lds: dg entry missing sequence"`, `"lds: dg entry wrong sequence length"`, `"lds: dg entry missing integer"`, `"lds: dg entry wrong integer length"`, `"lds: dg entry missing octet string"`, `"lds: dg entry wrong hash length"`), the data group number against the public input (`"lds: dg entry wrong dg number"`), the number's range (`"lds: dg number must be >= 1"`, `"lds: dg number must be <= 16"`) and the bounds (`"lds: dg entry out of bounds"`).
+`dg_extract::extract_sha256` re-hashes the Security Object and requires the result to reproduce the binding the Passive Authentication proof published, failing with `"dg_extract: security object does not match the authenticated one"`. It then asserts the SHA-256 algorithm identifier is present (`"lds: wrong hash algorithm oid"`) and reads one entry through `lds::dg_entry_sha256`, which checks the DER header shape, the data group number against the public input (`"lds: dg entry wrong dg number"`), the number's range and the bounds.
 
-Because `dg_number` is a public input, a relying party states which data group a proof concerns rather than accepting the prover's later description of it. The test `dg_extract::rejects_reading_an_entry_as_the_wrong_data_group` covers the mismatch.
+Because `dg_number` is a public input, a relying party states which data group a proof concerns rather than accepting the prover's later description of it. Two buffer sizes ship, 512 and 1024 bytes; the smaller holds Security Objects of up to twelve SHA-256 entries and the larger holds a full sixteen.
 
 ### 3.3 Attribute commitment
 
-`attributes::td3` and `attributes::td1` re-hash the supplied DG1 and require the result to reproduce the data group binding the extraction proof published, failing with `"attributes: data group was not the authenticated one"`. The DER template is checked by `check_dg1_template`, which pins the total length (`"attributes: unexpected dg1 length"`), the outer tag (`"attributes: dg1 is missing its template tag"`), the inner tag (`"attributes: missing machine readable zone tag"`) and both declared lengths (`"attributes: dg1 template length mismatch"`, `"attributes: machine readable zone length mismatch"`).
+`attributes::td3`, `attributes::td2` and `attributes::td1` re-hash the supplied DG1 and require the result to reproduce the data group binding the extraction proof published, failing with `"attributes: data group was not the authenticated one"`. The DER template is checked by `check_dg1_template`, which pins the total length (`"attributes: unexpected dg1 length"`), both tags and both declared lengths. The three layouts carry 88, 72 and 90 machine readable zone characters, so a document presented to the wrong profile fails at the length check rather than producing a commitment over fields read at the wrong offsets.
 
-The length check is what keeps the two document layouts apart. TD3 carries 88 machine readable zone characters and TD1 carries 90, so a card presented to the passport profile, or the reverse, fails at `"attributes: unexpected dg1 length"` rather than producing a commitment over fields read at the wrong offsets. Both `attributes::rejects_a_card_layout_read_as_a_passport` and the binary test `rejects_a_passport_read_as_a_card` cover this.
+Check digits are verified over the document number, birth date, expiry date, the optional data where the layout has its own digit, and the composite. Dates are parsed strictly: non digits, months outside 1 to 12 and impossible calendar days all fail, including leap year handling in `assert_day_in_month`. Doc 9303's own filler conventions are honored where the standard requires them and nowhere else.
 
-Check digits are verified by `mrz::td3_validate` and `mrz::td1_validate` over the document number, birth date, expiry date, optional data on TD3, and the composite. Dates are parsed strictly: non digits fail at `"mrz: invalid date digit"`, months outside 1 to 12 at `"mrz: month out of range"`, and impossible calendar days at `"mrz: day out of range for month"`, including leap year handling in `assert_day_in_month`.
+`current_yyyymmdd` is a public input because it decides how a two digit birth year resolves. The comment on `mrz::birth_date_to_int` states the reason: "a prover free to choose it can move a birth date by a century", and a test demonstrates the attack the public input closes: a holder born in 2010 reads as born in 1910 under a prover chosen date and passes an adult check.
 
-`current_yyyymmdd` is a public input because it decides how a two digit birth year resolves. The comment on `mrz::birth_date_to_int` states the reason: "a prover free to choose it can move a birth date by a century".
-
-The commitment is built over sixteen leaves with `commit::leaf`, each carrying its own field identifier, length, packed data and per-field entropy derived from `commit::entropy_seed` and `commit::field_entropy`. The seed rejects a zero session salt at `"commit: session salt must be non-zero"`. Only the commitment leaves the circuit. Birth and expiry dates are computed inside and never published.
+The commitment is built over sixteen leaves with `commit::leaf`, each carrying its own field identifier, length, packed data and per field entropy derived from `commit::entropy_seed` and `commit::field_entropy`. The seed rejects a zero session salt at `"commit: session salt must be non-zero"`. Only the commitment leaves the circuit. Birth and expiry dates are computed inside and never published.
 
 ### 3.4 Field predicates
 
-Every predicate opens the field first, through the private `open` in `circuits/lib/claims/predicate/src/lib.nr`, which the nullifier reaches through the exported `predicate::open_field`. It bounds the field identifier (`"predicate: field identifier out of range"`), rebuilds the leaf, walks it to a root using `field_id - 1` as the Merkle index, and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published, failing with `"predicate: field is not part of the committed document"`.
+Every predicate opens the field first, through `open` in `lib/claims/predicate`, which the nullifier reaches through the exported `predicate::open_field`. It bounds the field identifier, rebuilds the leaf, walks it to a root using `field_id - 1` as the Merkle index, and requires `commit::commitment(root, domain)` to equal the commitment the attribute circuit published, failing with `"predicate: field is not part of the committed document"`. Deriving the index from the field identifier rather than accepting it separately is what stops a value being claimed under a different identifier.
 
-Deriving the index from the field identifier rather than accepting it separately is what stops a value being claimed under a different identifier. The test `predicate::rejects_a_field_claimed_under_another_identifier` changes only `field_id` and confirms the opening no longer reaches the committed root.
-
-On top of that opening: `compare` requires a non-empty range (`"predicate: empty range"`), requires the value to fit one field element and to be an integer (`"predicate: value does not fit one element"`, `"predicate: value is not an integer"`), and bounds it (`"predicate: value below the minimum"`, `"predicate: value above the maximum"`). `member` requires a Merkle path from `commit::set_entry(opening.data)` to the published root (`"predicate: value is not in the set"`). `reveal` requires the published value and length to match the opened ones (`"predicate: revealed value does not match"`, `"predicate: revealed length does not match"`).
+On top of that opening: `compare` requires a non empty range, requires the value to fit one field element and to be an integer, and bounds it. `member` requires a Merkle path from `commit::set_entry(opening.data)` to the published root (`"predicate: value is not in the set"`). `reveal` requires the published value and length to match the opened ones. Every value in the binding chain starts with a role tag, and Merkle internal nodes are the one untagged hash at the one width no tagged value uses, so no value produced for one role can stand in for another.
 
 ### 3.5 Nullifier
 
 `nullifier::document_number` pins the two openings to specific fields (`"nullifier: first opening must be the issuing state"`, `"nullifier: second opening must be the document number"`), opens both against the attribute commitment, and requires `commit::secret_binding(secret, domain)` to equal the binding the Passive Authentication proof published, failing with `"nullifier: secret does not match the authenticated document"`.
 
-The secret is `commit::document_secret` over the Security Object signature. The comment on that function gives the two properties required: it is fixed at issuance so a prover cannot choose it, and it is not printed on the data page so it cannot be guessed from a photocopy. `commit::nullifier` rejects a zero secret at `"commit: nullifier secret must be non-zero"`.
+The secret is `commit::document_secret` over the Security Object signature, or its limb folding twin for RSA. The comment on that function gives the two properties required: it is fixed at issuance so a prover cannot choose it, and it is not printed on the data page so it cannot be guessed from a photocopy. `commit::nullifier` rejects a zero secret. Together with the canonical `s` rule of section 3.1, one document yields exactly one nullifier per application.
 
-The resulting value is deterministic per document per `domain`, and unlinkable across domains because `domain` is hashed into it. Tests `the_same_document_gives_the_same_value_within_an_application` and `different_applications_give_unlinkable_values` cover both directions.
-
-The policy identifier is `policy::DOCUMENT_NUMBER_V1`, passed as a constant inside `nullifier::document_number`. It is not a public input, so a relying party learns which policy produced a nullifier only from which verification key it accepted. Note that the header comment on `circuits/lib/claims/policy/src/lib.nr` says the identifier "is a public input", which does not match the shipped circuit; `prover/layout.manifest` records the nullifier public inputs as `commitment secret_binding domain context return[0]`. `policy::assert_supported` exists but is called by no circuit; the only callers are its own tests.
+The resulting value is deterministic per document per `domain`, and unlinkable across domains because `domain` is hashed into it. The policy identifier is `policy::DOCUMENT_NUMBER_V1`, hashed in as a constant rather than published, so a relying party learns which policy produced a nullifier from which verification key it accepted, and an application must accept exactly one nullifier verification key per domain. The header of `lib/claims/policy` states why: accepting two "lets one holder present two different nullifiers, which defeats the uniqueness the nullifier exists to provide".
 
 ### 3.6 Document Signer trust
 
-`anchor::prove_signer_is_trusted` hashes the signer key with `commit::pubkey_hash`, requires a Merkle path from that hash to a published registry root (`"anchor: signer key is not in the published set"`), and returns `commit::dsc_commitment(leaf, salt)`, the same value Passive Authentication publishes. `bin/anchor/dsc_inclusion` instantiates it at depth sixteen and requires both scoping inputs to be set (`"anchor: context must be set"`, `"anchor: domain must be set"`). Its tests pass under the pinned toolchain.
+Two anchor modes ship, and they differ in who is trusted to have checked what.
 
-The off-chain verifier consumes this circuit; see section 4.1. What the circuit assumes is recorded in its own header: "whoever built the set checked the certificates behind it. Verifying the country signing certificate in circuit instead removes that assumption and is not implemented."
+`anchor::prove_signer_is_trusted` hashes the signer key, requires a Merkle path from that hash to a published registry root (`"anchor: signer key is not in the published set"`), and returns the same salted commitment Passive Authentication publishes. What it assumes is recorded in its own header: whoever built the set checked the certificates behind it.
 
-### 3.7 Session scoping
+`anchor::prove_signer_is_certified` removes that assumption for the Document Signer certificate. It verifies the country signing key's RSA PKCS#1 v1.5 signature over the certificate, checks the certificate is valid on the supplied date through `x509::assert_valid_at` (`"x509: certificate is not yet valid"`, `"x509: certificate has expired"`), requires the country signing key to sit in the published master list (`"anchor: country signing key is not in the published list"`), and reads the certified key out of the signed certificate rather than taking it as an input. What remains trusted is the list of country signing keys, which is the trust anchor of the whole system and cannot be derived from the document. The instantiation covers an RSA-2048 authority and a certificate of up to 512 bytes; a state whose authority signs with another algorithm has no chain circuit yet. Validity times are read as UTCTime only, the form RFC 5280 requires below 2050, and a GeneralizedTime fails rather than being read as something else.
 
-Every binary circuit asserts its session context is set: `"sod: context must be set"` in both Passive Authentication variants, then `"dg_extract: context must be set"`, `"attributes: context must be set"`, `"predicate: context must be set"`, `"nullifier: context must be set"` and `"anchor: context must be set"`. The comment in `bin/sod/ecdsa_p256_sha256_ec512/src/main.nr` explains why a non-zero assertion rather than nothing: it "puts a real constraint on it, rather than leaving it an input the circuit never reads". Commit `c9a27c9` in the circuits repository records that both circuits at the time carried `assert(context == context)`, which the compiler removed, leaving the input in the ABI but unread.
+### 3.7 Chip presence
 
-`context` deliberately enters no derived value. The header of `circuits/lib/core/commit/src/lib.nr` states the rule: `domain` enters every value a verifier stores or compares across sessions, `context` enters none, because mixing it in would change stored values every session.
+`bin/chip/active_p256_sha256` is the one statement in the protocol that a copy of a document's data cannot make. Doc 9303 Part 11 Active Authentication gives the chip a key pair whose public half sits in DG15, covered by the Security Object like any other data group, and whose private half never leaves the chip. The circuit checks the data group binding against the one the extraction proof published (`"chip: data group was not the authenticated one"`), reads the public key out of the signed data group rather than taking it as an input, and verifies the chip's ECDSA P-256 answer over SHA-256.
 
-## 4. What the bundle check constrains
+The challenge is eight bytes, because the chip's INTERNAL AUTHENTICATE command takes exactly eight, so anything wider could never be signed by real hardware. It is bound to the session by derivation rather than by transport: the circuit requires the challenge to equal the first eight bytes of SHA-256 over the context's 32 byte big endian form (`"chip: the challenge is not this session's context"`), and the terminal derives the same bytes when it issues the challenge, so the two sides share nothing beyond the context itself. An answer kept from an earlier exchange fails because its challenge derived from an earlier context.
 
-### 4.1 What `verify_bundle` enforces
+The freshness this buys is exactly the freshness of the context. A relying party that issues a fresh unpredictable context per exchange gets presence at this exchange. The on chain registry uses the sender address as the context, which is stable, so there a chip proof would mean the chip answered for this sender at some point, not at this block; the registry accordingly does not take one. The derived challenge is a 64 bit value, so an attacker replaying recorded answers needs a recorded challenge to collide with the current derivation, which is negligible across any realistic number of recorded sessions and does not help against the signature itself.
 
-`verify_bundle` runs in a fixed order. It rejects a zero policy context (`Failure::ContextNotSet`). Then for every proof it requires the verification key to be one the policy accepts (`Failure::UntrustedVerificationKey`), requires `bb verify` to succeed (`Failure::ProofRejected`), requires the proof's `domain` to equal the policy domain (`Failure::WrongDomain`), and requires its `context` to equal the policy context (`Failure::WrongContext`).
+What this does not rule out is a relay: a terminal that forwards the challenge to a genuine chip somewhere else. Nothing in a proof can, since ruling that out is a distance bound and therefore a property of the reader's radio. It also does not cover chips whose Active Authentication key is RSA, which answer under ISO 9796-2 with SHA-1, neither of which is carried; and Chip Authentication, the Diffie Hellman variant of Part 11, is not implemented.
 
-The bytes handed to `bb` as public inputs are re-serialized from the same `PublicInputs` the equality checks later read, so the values compared below are the values the proof was verified against.
+### 3.8 Recursive aggregation
 
-It then requires exactly one Passive Authentication proof (`Failure::NoSecurityObjectProof`, `Failure::MoreThanOneSecurityObjectProof`), requires every extraction proof to reference that proof's `econtent_binding` (`Failure::UnlinkedDataGroup`), requires every attribute proof to reference one of the extracted data group bindings (`Failure::UnlinkedDataGroup`), requires every predicate and the nullifier to reference a commitment an attribute proof published (`Failure::UnlinkedCommitment`), and requires the nullifier's `secret_binding` to equal the one the Passive Authentication proof published (`Failure::NullifierFromAnotherDocument`).
+Two registration circuits verify a whole document chain in one proof: Passive Authentication, a data group 1 extraction, the attribute commitment, and one of the two anchors. Their linkage is not a checklist: each shared value appears once as a witness and is placed into the public inputs of every inner proof that carries it, so the equalities the off chain verifier enforces between separate proofs hold by construction. The extraction is pinned to data group 1, and the four exposed values are the commitment, the secret binding, the date and the registry root. The session circuit does the same for a compare and a member predicate over one commitment.
 
-For each anchor proof in the bundle it requires the anchor's `dsc_commitment` to equal the one the Passive Authentication proof published (`Failure::AnchorForAnotherSigner`), and, when `Policy::registry_root` is set, requires the anchor's `registry_root` to equal it (`Failure::AnchorAgainstAnotherRegistry`). If `Policy::require_trust_anchor` is set and no anchor proof was seen, the bundle is rejected (`Failure::NoTrustAnchorProof`). The registry root that was proved against is returned as `Verified::signer_registry_root`.
+The verification key hashes of the inner circuits are compiled in from a generated `keys.nr`, so a registration circuit's identity fixes exactly which variants it aggregates. The keys themselves stay private witnesses; the backend constrains each against its pinned hash. A stale pin is not a build error but a proof that fails to verify, which is why continuous integration regenerates the hashes and fails on drift.
 
-Two failure modes this closes are named in the module header. A bundle whose proofs carry different domains "is several documents wearing one identity". A proof from a weaker circuit variant is a downgrade unless the verifier states which verification keys it accepts, which `Policy::accepted_keys` makes mandatory rather than optional: a circuit with no entry in the map is rejected outright.
+The backend property this rests on has to be stated: `bb` produces a proof over an unsatisfied witness without complaint, so executing and even proving a recursive circuit means nothing on its own. A forged inner proof surfaces only when the outer proof is verified. Verification is the only outcome that carries information, on this stack and equally on the Groth16 stack of section 6.
 
-### 4.2 What `verify_bundle` does not enforce
+### 3.9 Session scoping
 
-A relying party integrating against this crate must handle all of the following itself. None of it is checked.
+Every binary circuit asserts both scope values are set, with its own message, `"sod: context must be set"` through `"registration: domain must be set"`. `domain` enters every value a verifier stores or compares across sessions; `context` enters none of them, so a proof is scoped to one session without changing any stored value between sessions. The header of `lib/core/commit` states the rule, and the on chain registry closes the loop by taking the sender address as the context, so a proof prepared for one sender reverts in any other sender's transaction.
 
-The verifier surfaces `dg_number` as a `Statement::DataGroup` and compares it to nothing, so a leaf bundle establishes which data group was extracted only if the relying party reads the statements. The registration circuit pins the number to 1 in circuit, so the aggregate form does not carry this obligation.
+## 4. What the off chain verifier enforces
 
-The verifier does not read `current_yyyymmdd`. `PublicInputs::attributes_current_date` exists and is called only by the layout tests. A bundle can carry an attribute proof built against any date the prover chose, which moves birth dates by a century.
+`verify_bundle` in `prover/src/verify.rs` runs the whole checklist in a fixed order. It rejects a zero context (`ContextNotSet`) and a zero domain (`DomainNotSet`), and rejects a policy that requires a trust anchor without fixing a registry (`RegistryRootNotSet`), which closes the configuration where any registry the prover built would satisfy the requirement. For every proof it requires the verification key to be one the policy accepts for that circuit (`UntrustedVerificationKey`), requires `bb verify` to succeed (`ProofRejected`), and requires the proof's domain and context to equal the policy's (`WrongDomain`, `WrongContext`). Acceptance is decided on the key bytes the proof is actually verified against, not on a digest supplied beside them.
 
-The verifier never reads `minimum`, `maximum` or `set_root`. It reads `field_id` only from a `reveal` proof, and only to label the value in `disclosed_fields`. `Policy` has no field that names a required statement, and `Verified` returns `nullifier`, `dsc_commitment`, `disclosed_fields` and `signer_registry_root`. A bundle containing only a Passive Authentication proof verifies successfully and returns an empty `disclosed_fields`. "Verified" therefore means a signed document exists and the bundle is internally consistent, not that any question the relying party asked was answered.
+A bundle must establish exactly one document, either a Passive Authentication proof or a registration proof (`NoSecurityObjectProof`, `MoreThanOneSecurityObjectProof`). Around a Passive Authentication proof, every extraction must reference its `econtent_binding` (`UnlinkedDataGroup`), every attribute proof must reference an extracted data group binding, every predicate and the nullifier must reference a committed document (`UnlinkedCommitment`), the nullifier's secret binding must equal the document's (`NullifierFromAnotherDocument`), at most one nullifier proof may appear (`MoreThanOneNullifierProof`), and a chip proof must attach to a data group this document's Security Object committed to (`ChipFromAnotherDocument`). Anchor proofs must be about the key that signed the document (`AnchorForAnotherSigner`) and against the policy's registry (`AnchorAgainstAnotherRegistry`), and a required anchor must be present (`NoTrustAnchorProof`).
 
-The trust anchor check is opt-in and is off unless asked for. `Policy::new` sets `require_trust_anchor` to false and `registry_root` to `None`, so a bundle with no anchor proof verifies and `dsc_commitment` is returned to the caller unchecked. `Policy::require_anchor` sets both together, but the fields are public, so a policy built field by field can end up requiring an anchor without naming a registry, in which case any registry root satisfies the check.
+Beside a registration proof, leaf proofs of the kinds it aggregates are rejected outright (`NotLinkableToRegistration`), because the aggregate deliberately does not expose the values they would have to match. Signer trust is proved inside the registration, so the anchor requirement is satisfied by construction and the proved root is still checked against the policy's.
 
-The verifier does not recompute `Proof::verification_key_hash` from `Proof::verification_key`. Acceptance is decided on the caller-supplied hash while `verify_one` writes the caller-supplied key bytes to disk for `bb`. Nothing in the crate hashes anything. An integration that deserializes both from an untrusted source, and trusts the transmitted hash, loses the downgrade protection the policy is meant to provide. The integration must derive the hash from the bytes it actually passes to the verifier.
+Dates are read from every proof that resolves them, checked against the policy window when one is set (`DateOutsideWindow`), and required to agree across the bundle (`InconsistentDates`), so the date that resolved a birth year is the date the certificate was checked against.
 
-The verifier does not return `revealed_length`. `disclosed_fields` carries the four packed elements from indices 2 through 5 but not index 6, so a caller cannot distinguish a short value from a value with leading zero bytes without reading the public inputs itself.
+What the verifier returns is as load bearing as what it rejects. `Verified::statements` lists what was actually proved, one `Statement` per claim: which data group was extracted, `ChipPresent`, and the field, bounds, set root or revealed value of each predicate. A relying party that does not read the statements knows only that a signed document exists and that the bundle is internally consistent, not that any question it asked was answered. `verify_session` covers the later exchanges: it accepts predicate, session and chip proofs against a stored registration, requires the commitment to match the stored one, and rejects document establishing proofs (`NotASessionProof`).
 
-If a bundle contains more than one nullifier proof, `Verified::nullifier` holds the last one seen; there is no rejection for the duplicate. The same is true of `signer_registry_root` when several anchor proofs are present, though each of those must still match the signer commitment.
+## 5. What the contract enforces
 
-`Policy::domain` is not required to be non-zero. Only the context is. Among the circuits, only `bin/anchor/dsc_inclusion` asserts a non-zero domain in circuit.
+`ZkIcaoRegistry.register` takes a registration proof and a nullifier proof and performs the aggregate bundle checklist in Solidity: input counts (`MalformedInputs`), the domain on both proofs (`WrongDomain`), the context, which is the sender address, on both proofs (`WrongContext`), the pinned signer registry root (`WrongRegistry`), the date window fixed at deployment (`DateOutsideWindow`), the commitment linkage between the two proofs (`UnlinkedCommitment`), the secret binding linkage (`NullifierFromAnotherDocument`), nullifier uniqueness (`AlreadyRegistered`), and then verifies both proofs (`RegistrationProofRejected`, `NullifierProofRejected`) before storing the nullifier and the commitment.
 
-## 5. What the system does not protect against
+The contract compares field elements and stores one; it derives nothing. Every Poseidon2 in the protocol is computed inside a proof and reaches the chain as a public input, which is the design constraint that keeps the contract affordable on chains with no Poseidon2 precompile, and a test measures the contract's own cost with verification removed so that giving the constraint up would show as a number.
 
-### 5.1 A cloned chip
+What the deployer is trusted for is explicit and immutable: the two verifier contracts, the domain, the signer registry root and the date window are constructor parameters, and there is no owner, no upgrade path and no setter. A deployment with a wrong or malicious verifier is a wrong deployment, not an attack on a correct one; the deploy script takes every value from the environment and refuses to invent defaults. The date window also means an honest deployment goes stale: past `latestDate` every registration reverts until a new deployment exists, which is a liveness property the deployer chooses, not a defect.
 
-There is no active authentication circuit anywhere in the repository, and no chip authentication or terminal authentication of any kind. Nothing in any circuit involves a challenge, a response, or a key held by the chip. A search of `circuits/lib` and `circuits/bin` for any of those terms returns nothing.
+The generated UltraHonk verifier sits a few hundred bytes under the EIP-170 size limit only at the optimizer setting pinned in `foundry.toml`, which is why that file calls the pin load bearing; at the Foundry default the verifier does not deploy at all. A test measures the deployed sizes so the margin cannot regress silently.
 
-Everything the circuits check is a property of static data. An attacker who obtains a complete copy of a genuine document's chip contents, by any means, holds everything needed to produce a valid bundle: `econtent`, `signed_attrs`, the Document Signer public key and signature, and DG1. All of it is signed data that copies exactly. The proofs will verify. Nothing distinguishes the copy from the original.
+## 6. The second proving stack
 
-This is the core limitation of Passive Authentication as a standalone mechanism, and it is not mitigated here. A deployment that needs chip liveness must obtain it outside these circuits.
+The predicate layer exists a second time under `circuits/groth16`, as circom circuits proved with rapidsnark and verified by a generated Groth16 contract, for the case where a verifier lives on chain and proof size is what costs. Three properties carry the security story.
 
-The same copy also yields the document secret, since that is derived from the Security Object signature, so nullifier uniqueness offers no protection here either: the copy produces the genuine holder's nullifier.
+The Poseidon2 the circom side computes is the Poseidon2 the Noir side computes. This is not assumed from shared constants, it is tested: the agreement check opens a commitment the Noir circuits produced inside the circom predicate, across every sponge width the protocol uses, and adversarial variants are refused.
 
-### 5.2 A Document Signer that is not checked against a trust anchor
+Neither the witness calculator nor the prover checks a constraint. rapidsnark produces a proof over an unsatisfied witness exactly as `bb` does, and the repository keeps a forged fixture to demonstrate it: snarkjs answers `Invalid proof` and the on chain verifier refuses it. Verification is the only check, stated in both stacks' documentation.
 
-The `anchor/dsc_inclusion` circuit exists, works, and can be demanded through `Policy::require_anchor`. It is not demanded by default. In a deployment that leaves `require_trust_anchor` false, a bundle proves the document was signed by some key and proves nothing about whose key.
+The proving key shipped for tests came from a local phase 2 contribution, so it belongs to a development ceremony and to nothing else. A deployment that wants Groth16's verification price must run its own ceremony and export its own verifier; UltraHonk needs no ceremony, which is the other side of the trade the two stacks exist to offer.
 
-An attacker who generates their own key, builds a Security Object over data of their choosing and signs it, exactly as `circuits/fixtures/generator` does, produces a bundle that such a `verify_bundle` call accepts and that carries entirely fabricated attributes. This is not a subtle attack; it is the default outcome of not asking for the anchor.
+## 7. What the system does not protect against
 
-With the anchor required, two gaps remain. The trust set is a Merkle root the verifier publishes, and the circuit assumes whoever built that set validated the certificates behind it. No code in this repository builds such a set. There is no circuit that verifies a Document Signer Certificate against a Country Signing Certificate Authority, so certificate validity periods, key usage, and revocation are outside the constraint system entirely. `README.md` lists `anchor/csca-chain` as intended; it does not exist. A `lib/core/x509` package with certificate parsing helpers exists in the working tree, uncommitted, and no circuit depends on it.
+A copy of a chip's data, wherever no chip statement is demanded. Everything except the chip circuit checks static data, so an attacker who read a genuine chip holds everything needed to produce valid proofs, including the genuine holder's nullifier, since the document secret is derived from the Security Object signature that same read yields. A relying party that needs liveness has to demand `ChipPresent` in the statements and issue fresh contexts; one that does not has chosen Passive Authentication's limits.
 
-### 5.3 A relying party that does not run the verifier honestly
+A relay of the chip itself, as section 3.7 states.
 
-`verify_bundle` runs inside the relying party's own process. Nothing observes it. A relying party can call it and ignore the result, call it with a permissive policy, skip it entirely, or accept a bundle whose predicates prove nothing it asked for. No party other than that relying party learns whether verification happened.
+Correlation through the signer commitment where the public registry convention is used. `dsc_commitment` with a zero salt is a deterministic function of the signer key, stable across applications, and identifies the issuing state and batch, linking every holder who shares a signer. A random salt closes this and costs the verifier an anchor proof instead of a table lookup. The salt is the prover's choice and the deployment's convention, not a circuit guarantee.
 
-This is inherent to off-chain verification and is stated here because the failure modes in section 4.2 make it easy to reach accidentally rather than maliciously: an integration that treats `Ok(Verified)` as an answer to its question, without inspecting the predicate public inputs, has effectively not verified.
+Linkage the wallet creates. A reused or predictable `session_salt` links sessions or worse: the salt is the only hiding input in the commitment chain, and the comment on `commit::entropy_seed` spells out that with a guessable salt a photocopy suffices to recompute a commitment and test it against a registry. Distinct applications must also use distinct domains, or their nullifiers become linkable by construction.
 
-The verifier also shells out to `bb` resolved through `PATH`, writing the key, proof and public inputs into `std::env::temp_dir().join(format!("zkicao-verify-{}", std::process::id()))`. That path is predictable and shared, so two concurrent `verify_bundle` calls in the same process collide on the same files, and a local process able to write into the temp directory between the write and the `bb` invocation can substitute them. Verification is only as trustworthy as the host it runs on and the binary it finds.
+Uniqueness beyond one document. The nullifier is unique per document per domain, not per person. A holder with a passport and an identity card, or documents from two states, is two registrations. A replacement document is a new registration, because the secret dies with the old chip. A reissue stable policy would need a secret source that survives reissue without becoming guessable or service dependent, and no such source ships; the policy library deliberately declares only what is implemented.
 
-### 5.4 Anything the holder chooses to disclose
+Revocation and validity beyond the date window. The expiry date is committed and can be bounded with `compare`, and the chain anchor checks certificate validity at the proving date, but nothing checks that a document was not reported lost, and no revocation list of any kind exists in the system.
 
-`predicate/reveal` publishes `revealed[0]` through `revealed[3]` and `revealed_length` as public inputs. Whatever field is revealed is revealed, in full, to whoever receives that proof and to anyone they pass it to. The circuit's own header says so: "unlike the other predicates this one hands the verifier the field itself".
+Context freshness. The circuits require a non zero context; they cannot require an unpredictable one. A relying party that reuses contexts invites replay of whole bundles, and one that derives them predictably weakens the chip statement to the same degree.
 
-The same applies at coarser grain to every predicate. A `compare` proof discloses that the value falls in the published range; a `member` proof discloses that the value is in the published set. A relying party that publishes a single element set learns the value exactly. A relying party that issues a sequence of narrowing `compare` bounds across sessions performs a binary search on a private field, and nothing in the circuits limits how many statements a holder is asked for.
+The proving device. A compromised device leaks the document data and the document secret, which is sufficient to impersonate the holder to every application permanently. Side channels, faults and malware on that device are out of scope.
 
-The system constrains what a proof means, not what a holder agrees to prove. Consent is the wallet's responsibility, and no wallet exists in this repository.
+Denial of service, either against a relying party asked to verify many bundles or against a prover.
 
-### 5.5 Correlation through the Document Signer commitment
+## 8. Assumptions
 
-`commit::dsc_commitment(dsc_pubkey_hash, salt)` does not include `domain`, and the test `sod::outputs_change_with_the_domain` asserts exactly that: the commitment is identical across applications. `dsc_salt` is an unconstrained private input to both Passive Authentication circuits.
+On the issuing state: the Document Signer key is not compromised, and the signed data is true. Passive Authentication cannot distinguish a correctly signed lie from a correctly signed truth. Check digits do not strengthen this: the 7-3-1 weighting misses substitutions differing by a multiple of ten, a test demonstrates it, and integrity rests entirely on the signature over DG1. The document number policy additionally assumes an issuing state does not reuse a document number across concurrently valid documents.
 
-The comment on `commit::dsc_commitment` records the trade-off. With `salt = 0`, the public registry convention, the commitment is a deterministic function of the signer key alone, so it is a stable cross-application identifier of the issuing state and issuing batch, and every holder whose document shares a signer is linkable to every other. With a random salt, that linkage is closed but a verifier can no longer match a precomputed table and needs an anchor proof instead, which `Policy::require_anchor` makes it able to demand.
+On witness preparation: the signature `s` must be normalized to `n - s` when it exceeds `n/2`, offsets must be located correctly, `session_salt` must be fresh entropy per session, and the RSA reduction parameter must be supplied correctly, which is a liveness obligation rather than a soundness one since the bignum backend constrains every multiplication against the modulus. The fixture generator does all of this for the synthetic documents; anything that reads real documents has to do the same.
 
-### 5.6 Linkage the wallet chooses to create
+On the toolchain: `circuits/TOOLCHAIN.md` pins the compilers, the proving backends and every circuit dependency for both stacks. Trusting a proof means trusting the Noir and circom compilers to lower the source into equivalent constraint systems, the pinned implementations of SHA-256, Poseidon2, ECDSA and bignum arithmetic, and the provers and verifiers behind them, along with whatever setup each proving system requires. The layout table in `prover/src/layout.rs` is guarded by the generated `layout.manifest` and the tests that read it.
 
-`entropy_seed` constrains `session_salt` to be non-zero and nothing more. A prover that reuses a salt produces the same commitment in every session, which links those sessions. A prover that uses a predictable salt is worse: the comment on `entropy_seed` explains that the salt is the only hiding input in the chain, that `dg_hash` for the MRZ profiles is SHA-256 over DG1, which is the printed machine readable zone wrapped in a TLV template, and that without real hiding "a party holding a photocopy of the data page could recompute the holder's commitment for a domain and test it against a registry".
+On the relying party: it issues a fresh unpredictable context per exchange and rejects reuse, uses a domain distinct from other applications, accepts exactly one nullifier verification key per domain, requires the anchor with the registry root it trusts, sets a date window, and reads the returned statements to confirm the bundle answers what it asked. Off chain verification runs in the relying party's own process and nobody else observes it; a party that ignores the result has not verified.
 
-Similarly, `domain` separation only works if distinct applications use distinct domains. Two relying parties that agree to use the same domain receive the same nullifier for the same holder and can link their records.
+On the deployer of a registry contract: the verifier addresses and policy values baked into the constructor are correct, and the signer registry root it pins was assembled from validated certificates using the same leaf derivation the circuits use.
 
-### 5.7 Uniqueness that is weaker than one value per person
+## 9. Where the measured numbers live
 
-The nullifier is unique per document per domain, not per person. `nullifier::document_number`'s header states it: a replacement document produces a different value, both because the document number usually changes and because the secret is tied to this document's signature. A person holding a passport and a national identity card, or a person holding documents from two states, produces two distinct nullifiers under the same domain. Nothing detects that.
+Every performance and size number is measured, not estimated, and each lives where regeneration re-measures it: opcode counts per circuit in `architecture.md` reproduced by `nargo info`, gas and byte sizes printed by the contracts test suite under `forge test -vv`, and the registration proving figures in the commit messages that introduced them. Two of them are load bearing for this chapter: the UltraHonk verifier's margin under the EIP-170 limit, which section 5 covers, and the roughly hundredfold gap between verifying on chain with UltraHonk and with Groth16, which is the entire reason the second stack and its ceremony trade exist.
 
-`policy::MRZ_STABLE_V1` and `policy::NATIONAL_IDENTIFIER_V1` are declared as constants but no circuit implements either, so no reissue-stable policy ships.
+## 10. Summary of open gaps
 
-An application must fix exactly one policy per domain. The header of `circuits/lib/claims/policy/src/lib.nr` notes that accepting two policies within one domain "lets one holder present two different nullifiers, which defeats the uniqueness the nullifier exists to provide". Since the policy identifier is not a public input, enforcing this means accepting exactly one nullifier verification key per domain.
+The gaps below are stated as absent rather than planned.
 
-### 5.8 Freshness, expiry and revocation
-
-Nothing checks that a document is currently valid. The expiry date is committed as field 7 and a relying party can prove a bound on it with `compare`, but `verify_bundle` neither requires such a proof nor checks its bounds. There is no revocation mechanism of any kind, and a stolen or reported document produces valid proofs indefinitely.
-
-Replay across sessions is prevented only to the extent the relying party issues a fresh, unpredictable `context` per exchange and rejects reuse. The circuits require the value to be non-zero; they cannot enforce that it is fresh.
-
-### 5.9 The proving device
-
-Side channel, fault and malware attacks on the device that holds the document data and builds witnesses are out of scope. A compromised device leaks the document contents and the document secret, which is sufficient to impersonate the holder to every application, permanently, since the secret is fixed at issuance.
-
-### 5.10 Denial of service
-
-Nothing here addresses resource exhaustion, either against a relying party asked to verify many bundles or against a prover.
-
-## 6. Assumptions
-
-### 6.1 On the issuing state
-
-The Document Signer private key has not been compromised and the issuing state's signing process does not sign false data. Passive Authentication proves what the state signed; it cannot distinguish a correctly signed lie from a correctly signed truth.
-
-The machine readable zone in DG1 matches the document that was actually issued. The check digits in `mrz::td3_validate` and `mrz::td1_validate` do not help here, and the test `check_digits_miss_multiple_of_ten_substitutions` demonstrates why: the 7-3-1 weighting is taken modulo 10, so substituting a character whose value differs by a multiple of ten leaves every check digit unchanged. The comment above that test states the conclusion: "Check digits therefore detect transcription mistakes, not tampering: integrity of the MRZ rests entirely on the Security Object signature over DG1."
-
-The document number is not reused across documents within an issuing state, since the document number policy derives uniqueness from the issuing state and document number pair.
-
-Certificate validity is established outside the circuits. Whoever assembles the anchor registry root is trusted to have validated the certificates it contains, and to have derived each leaf the way `commit::pubkey_hash` derives it, including the byte mapping the RSA variant applies to a modulus.
-
-### 6.2 On witness preparation
-
-Nothing in this repository builds a witness from a document read off a chip. The fixture generator writes a `Prover.toml` for the elliptic curve Passive Authentication circuit from its own synthetic document, and nothing more, so the following are obligations on whatever builds witnesses for real documents.
-
-The signature `s` value must be normalized to `n - s` whenever it exceeds `n / 2`. The header of `circuits/lib/core/sig/src/lib.nr` explains that the ECDSA backend aborts rather than returning false for high `s`, that RFC 5280 and RFC 5480 place no such restriction so roughly half of genuine documents carry high `s`, and that the normalization is sound because verification accepts `(r, s)` exactly when it accepts `(r, n - s)`. That header also states plainly that "no such code exists yet: until it does, every caller has to normalize for itself." The fixture generator does normalize, and the header of `circuits/lib/testdata/src/lib.nr` records it, but that code serves the fixtures alone.
-
-For the RSA variant the Barrett reduction parameter has to be supplied alongside the modulus. The header of `circuits/lib/core/rsa/src/lib.nr` records that a wrong hint cannot make a bad signature verify, because the bignum backend constrains every multiplication against it, so this is a liveness obligation rather than a soundness one.
-
-`session_salt` must be freshly sampled with real entropy per session, and `dsc_salt` must be chosen consistently with whatever trust check the deployment uses.
-
-Offsets must be correct. `digest_offset`, `oid_offset` and `dg_offset` are private inputs that the structure checks validate locally but do not derive.
-
-### 6.3 On the proving toolchain
-
-`circuits/TOOLCHAIN.md` pins nargo 1.0.0-beta.19, Barretenberg 4.2.0-aztecnr-rc.2 and noir_rs v1.0.0-beta.19-4, and pins the Noir dependencies: sha256 v0.3.0, poseidon v0.2.6, bignum v0.9.2-1, bigcurve v0.13.2-1 and ecdsa v0.3.0. A sha1 pin went with the build probe that was its only user, and the eleven circuits compiling under the pin is now what checks the dependency graph resolves.
-
-Trusting a proof means trusting the Noir compiler to lower the source in `circuits/lib` and `circuits/bin` into an equivalent constraint system, trusting those dependency implementations of SHA-256, Poseidon2, ECDSA and big integer arithmetic to be correct, and trusting Barretenberg's prover and verifier along with whatever setup its proving system requires. `verify_one` delegates the cryptographic check to `bb` rather than reimplementing verification, so the verifier inherits every assumption the prover carries.
-
-The public input indices in `prover/src/layout.rs` are defined by circuit signatures in a different repository. `prover/layout.manifest` is generated from the compiled ABIs and four tests check the table against it. `kind_of` covers all eight circuit kinds, and both Passive Authentication variants map through the `sod_` prefix, so drift in any shipped circuit fails a test. What those tests still cannot catch is a compiled package whose name matches no prefix: `kind_of` returns `None` and the manifest line is dropped without comment.
-
-### 6.4 On the relying party
-
-The relying party issues a fresh, unpredictable `context` per exchange and rejects reuse, uses a `domain` distinct from other applications, and accepts exactly one nullifier verification key per domain. It calls `Policy::require_anchor` with the registry root it trusts rather than leaving the anchor check off. It pins the verification key hash of every circuit variant it accepts, derived from the key bytes it actually verifies against, and it inspects the public inputs of predicate proofs to confirm they answer the question it asked.
-
-## 7. Measured sizes
-
-The measured numbers in the repository are all in commit messages.
-
-RSA costs about a quarter of the elliptic curve variant, which inverts the usual assumption: an RSA verification with a small exponent is seventeen modular multiplications, while an ECDSA verification pays for non native arithmetic throughout. Opcode counts are in `architecture.md`, which is the only place they are recorded.
-
-Commit `c9a27c9` records, for the Passive Authentication circuit and on a machine its message does not name, proving in 1.9 s, a 16000 byte proof, 128 bytes of public inputs for four field elements, and a 3680 byte verification key. Those figures predate the current signature: at that commit the circuit returned two values and carried four public inputs, where it now returns three and carries five. Nothing in the repository re-measures them.
-
-These numbers are relevant to the threat model in one respect. The signature check dominates and runs once, and the predicate circuits sit two orders of magnitude below it, so asking additional questions of an already authenticated document is comparatively cheap. That is what makes the relying party obligations in section 4.2 practical: reading a few more public inputs costs nothing, and requiring one more small proof costs a small fraction of the bundle.
-
-## 8. Summary of open gaps
-
-The gaps below are the ones a deployment must close before the system provides what its structure implies. They are stated as absent rather than planned.
-
-Trust anchoring is reachable but off by default, and it rests on a registry built outside the constraint system. `Policy::new` leaves `require_trust_anchor` false, and a policy that requires an anchor without naming a registry root accepts any root. No code in this repository builds a registry, and no circuit verifies a Document Signer Certificate against a Country Signing Certificate Authority. A `lib/core/x509` package with certificate parsing helpers exists in the circuits working tree, uncommitted, and no binary circuit depends on it.
-
-Chip liveness has no circuit. Active authentication is absent.
-
-The verifier does not carry a statement of what the relying party asked of the document, so it cannot check that the bundle answers it. `Policy` holds accepted keys, a domain, a context, a trust anchor requirement and a registry root, and nothing that names a field or a bound.
-
-`Proof::verification_key_hash` is trusted rather than derived, which weakens the downgrade protection it exists to provide.
-
-Four Passive Authentication variants ship: ECDSA over P-256 and P-384, and RSA PKCS#1 v1.5 at 2048 and 4096 bits, all with SHA-256. Other digests have no circuit, and `circuits/lib/core/hash/src/lib.nr` states only SHA-256 ships. Brainpool curves have no wrapper. All three machine readable zone layouts are implemented.
-
-For the RSA variant, `dsc_commitment` and the document secret come from `modulus_hash` and `limbs_document_secret`, which fold every limb. An anchor registry holding RSA entries has to use the same helper for its leaves, and no inclusion circuit takes a modulus yet.
-
-`lds::dg_entry_sha256` validates the DER header at the offset it is given and nothing about how that offset was reached. Its header records the limit and the mitigation: it "cannot tell a genuine entry from a byte sequence elsewhere in the buffer that happens to match the same seven header bytes", though "the hash read out is still covered by the signature over the Security Object, so a match on arbitrary bytes only yields data the issuer signed".
-
-`mrz::birth_date_to_int` resolves two digit years against the current two digit year, so holders older than one hundred years resolve to the wrong century. The comment records this as "a limit of two digit years in the machine readable zone itself".
-
-No genuine issued document has been proved end to end. All fixtures are synthetic and self-signed by `circuits/fixtures/generator`.
+No genuine issued document has been proved end to end; every fixture is synthetic and self signed. No third party audit has taken place. Digests other than SHA-256 have no circuit, which excludes documents whose Security Object or signatures use SHA-1, SHA-384 or SHA-512, and the chain anchor covers only an RSA-2048 authority over a certificate of up to 512 bytes. RSA public exponents other than 65537 are not verified. Certificates dated with GeneralizedTime, which RFC 5280 mandates from 2050, do not parse. Active Authentication for RSA chips and Chip Authentication are not implemented. Holders older than one hundred years resolve to the wrong century, a limit of two digit years in the machine readable zone itself. There is no revocation mechanism, no reissue stable nullifier policy, no wallet, and nothing that reads a physical chip.

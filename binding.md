@@ -2,7 +2,7 @@
 
 A relying party receives several zkICAO proofs, not one. Each proof is sound on its own and says nothing about the others. What makes a bundle describe a single document is a set of derived values that appear as public inputs in more than one proof, plus a verifier that requires them to be equal.
 
-This document specifies those values. Every formula here is implemented once, in `/Users/wstran/Desktop/zkICAO/circuits/lib/core/commit/src/lib.nr`. No circuit re-derives them. The equalities a verifier enforces are implemented once, in `/Users/wstran/Desktop/zkICAO/prover/src/verify.rs`, over the public input positions declared in `/Users/wstran/Desktop/zkICAO/prover/src/layout.rs` and pinned by `/Users/wstran/Desktop/zkICAO/prover/layout.manifest`.
+This document specifies those values. Every formula here is implemented once, in `circuits/lib/core/commit/src/lib.nr`. No circuit re-derives them. The equalities a verifier enforces are implemented once, in `prover/src/verify.rs`, over the public input positions declared in `prover/src/layout.rs` and pinned by `prover/layout.manifest`.
 
 zkICAO is an independent project. It is not affiliated with or endorsed by ICAO or any government.
 
@@ -63,15 +63,17 @@ The library header states the rule as "`domain` enters every value a verifier st
 
 That is the whole point. If `context` entered a derived value, that value would change every session, and the equalities in section 9 (which compare values produced by different proofs, potentially cached or produced at different moments) would have nothing stable to compare. Session scoping is achieved by requiring the public input to match the value the verifier issued, not by mixing it into the algebra.
 
-Because it is hashed into nothing, `context` has to be read by an explicit constraint or it would be an ABI entry the circuit never touches. Every binary asserts `context != 0`:
+Because it is hashed into nothing, `context` has to be read by an explicit constraint or it would be an ABI entry the circuit never touches. Every binary asserts `context != 0`, with a message prefixed by its phase; one message per phase, shared by every variant of it:
 
-- `bin/sod/ecdsa_p256_sha256_ec512/src/main.nr`: `"sod: context must be set"`
-- `bin/dg_extract/sha256_ec512/src/main.nr`: `"dg_extract: context must be set"`
-- `bin/attributes/mrz_td3_sha256/src/main.nr` and `bin/attributes/mrz_td1_sha256/src/main.nr`: `"attributes: context must be set"`
+- every `bin/sod/` variant: `"sod: context must be set"`
+- both `bin/dg_extract/` variants: `"dg_extract: context must be set"`
+- all three `bin/attributes/` layouts: `"attributes: context must be set"`
 - `bin/predicate/compare`, `bin/predicate/member`, `bin/predicate/reveal`: `"predicate: context must be set"`
-- `bin/nullifier/document_number/src/main.nr`: `"nullifier: context must be set"`
-- `bin/anchor/dsc_inclusion/src/main.nr`: `"anchor: context must be set"`
-- `bin/registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion/src/main.nr`: `"registration: context must be set"`
+- `bin/nullifier/document_number`: `"nullifier: context must be set"`
+- both `bin/anchor/` modes: `"anchor: context must be set"`
+- `bin/chip/active_p256_sha256`: `"chip: context must be set"`
+- both `bin/registration/` variants: `"registration: context must be set"`
+- `bin/session/compare_member`: `"session: context must be set"`
 
 `verify_bundle` refuses a policy whose context is zero (`Failure::ContextNotSet`) before it looks at any proof.
 
@@ -115,7 +117,7 @@ Binds one data group hash to one application. Same shape as 7.3 under a differen
 
 Computed in `lib/emrtd/dg_extract::extract_sha256` from the hash it read out of the authenticated Security Object, after `lds::check_sha256_oid` and `lds::dg_entry_sha256` confirm the entry is the requested `dg_number`. Published as `dg_extract` return[0].
 
-Checked in `lib/emrtd/attributes::td3` and `lib/emrtd/attributes::td1`, which hash the DG1 buffer they were given and assert the recomputed binding equals the `dg_binding` public input, with `"attributes: data group was not the authenticated one"`. Checked again across proofs by `verify_bundle`, step 5 of section 9.
+Checked in the three `lib/emrtd/attributes` profiles, which hash the DG1 buffer they were given and assert the recomputed binding equals the `dg_binding` public input, with `"attributes: data group was not the authenticated one"`, and in `lib/emrtd/chip::prove_presence_p256` the same way for DG15, with `"chip: data group was not the authenticated one"`. Checked again across proofs by `verify_bundle`, step 4 of section 9.
 
 ### 7.5 `pubkey_hash(x, y) = H(TAG_DSC_KEY, p[0], p[1], p[2], p[3])` where `p = pack_pair(x, y)`, tag 9
 
@@ -139,7 +141,7 @@ Lets a later circuit prove it holds the same secret without revealing it. Scoped
 
 Computed in `lib/emrtd/sod::outputs` as `secret_binding(document_secret(signature_r, signature_s), domain)` and published as `sod` return[2].
 
-Checked in `lib/claims/nullifier::document_number`, which recomputes `secret_binding(secret, domain)` from its private `secret` input and asserts it equals the `secret_binding` public input, with `"nullifier: secret does not match the authenticated document"`. Checked again across proofs by `verify_bundle`, step 6 of section 9. `the_secret_binding_separates_documents` in `lib/emrtd/sod` asserts two documents give different bindings under one domain.
+Checked in `lib/claims/nullifier::document_number`, which recomputes `secret_binding(secret, domain)` from its private `secret` input and asserts it equals the `secret_binding` public input, with `"nullifier: secret does not match the authenticated document"`. Checked again across proofs by `verify_bundle`, step 7 of section 9. `the_secret_binding_separates_documents` in `lib/emrtd/sod` asserts two documents give different bindings under one domain.
 
 ### 7.9 `entropy_seed(dg_hash, domain, session_salt) = H(TAG_ENTROPY, dg_hash[0], dg_hash[1], domain, session_salt)`, tag 5
 
@@ -161,7 +163,7 @@ Computed in `lib/emrtd/attributes::build_commitment`. Recomputed in `lib/claims/
 
 The value every statement about the document's fields is proved against. `root` is `root16` over the sixteen leaves.
 
-Computed in `lib/emrtd/attributes::build_commitment` and published as `attributes` return[0]. Checked in `lib/claims/predicate::open` for all three predicates, and in `lib/claims/nullifier::document_number` through the two `predicate::open_field` calls it makes before it uses any field value. Checked again across proofs by `verify_bundle`, step 6 of section 9.
+Computed in `lib/emrtd/attributes::build_commitment` and published as `attributes` return[0]. Checked in `lib/claims/predicate::open` for all three predicates, and in `lib/claims/nullifier::document_number` through the two `predicate::open_field` calls it makes before it uses any field value. Checked again across proofs by `verify_bundle`, step 7 of section 9.
 
 ### 7.13 `set_entry(data) = H(TAG_SET_ENTRY, data[0], data[1], data[2], data[3])`, tag 10
 
@@ -181,7 +183,7 @@ The policy identifier lives in `lib/claims/policy`: `DOCUMENT_NUMBER_V1` is 1001
 
 ## 8. Public input order
 
-`layout.manifest` is generated from the compiled ABIs and committed in the prover crate. Barretenberg lays out the public parameters in declaration order followed by the return values. The tests at the end of `layout.rs` cover this table by reading the manifest, and they fail if the indices this crate uses drift from it. `cargo test` in `/Users/wstran/Desktop/zkICAO/prover` reports 19 unit tests and one doc test on the current tree, plus 18 integration tests over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced.
+`layout.manifest` is generated from the compiled ABIs and committed in the prover crate. Barretenberg lays out the public parameters in declaration order followed by the return values. The tests at the end of `layout.rs` cover this table by reading the manifest, and they fail if the indices this crate uses drift from it. `cargo test` in the prover crate reports 21 unit tests and one doc test on the current tree, plus 27 integration tests over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced.
 
 | Package | Public inputs, in order |
 | --- | --- |
@@ -194,11 +196,12 @@ The policy identifier lives in `lib/claims/policy`: `DOCUMENT_NUMBER_V1` is 1001
 | `predicate_reveal` | `field_id`, `commitment`, `revealed[0..3]`, `revealed_length`, `domain`, `context` |
 | `nullifier_document_number` | `commitment`, `secret_binding`, `domain`, `context`, `return[0]` nullifier |
 | `anchor_dsc_inclusion` | `registry_root`, `domain`, `context`, `return[0]` DSC commitment |
+| `chip_active_p256_sha256` | `dg_binding`, `domain`, `context` |
 | `registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion` | `domain`, `context`, `return[0]` commitment, `return[1]` secret binding, `return[2]` current date, `return[3]` registry root |
 | `registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain` | the same layout; the master list root sits in the registry root position |
 | `session_compare_member` | `compare_field_id`, `minimum`, `maximum`, `member_field_id`, `set_root`, `domain`, `context`, `return[0]` commitment |
 
-`Circuit::domain_index` gives 0, 2, 2, 4, 3, 7, 2, 1, 2, 0 for `Sod`, `DgExtract`, `Attributes`, `Compare`, `Member`, `Reveal`, `Nullifier`, `AnchorInclusion`, `AnchorChain`, `Registration`. `Circuit::context_index` is defined as `domain_index() + 1`, and `context_always_follows_domain` plus `domain_and_context_sit_where_this_crate_reads_them` check that against the manifest for every circuit.
+`Circuit::domain_index` gives 0, 2, 2, 4, 3, 7, 2, 1, 2, 0, 5, 1 for `Sod`, `DgExtract`, `Attributes`, `Compare`, `Member`, `Reveal`, `Nullifier`, `AnchorInclusion`, `AnchorChain`, `Registration`, `SessionCompareMember`, `ChipActive`. `Circuit::context_index` is defined as `domain_index() + 1`, and `context_always_follows_domain` plus `domain_and_context_sit_where_this_crate_reads_them` check that against the manifest for every circuit. Variants of one phase share their phase's layout, which the manifest records per package.
 
 ## 9. The equalities a verifier enforces
 
@@ -207,8 +210,8 @@ The policy identifier lives in `lib/claims/policy`: `DOCUMENT_NUMBER_V1` is 1001
 1. `policy.context` is not zero, else `ContextNotSet`. `policy.domain` is not zero, else `DomainNotSet`. If `policy.require_trust_anchor` is set without `policy.registry_root`, `RegistryRootNotSet`, since an anchor accepted against an unspecified registry proves membership of a set the prover may have published itself.
 2. One pass over every proof, in order. Its verification key must be in `policy.accepted_keys[circuit]`, compared by the key bytes, else `UntrustedVerificationKey`. This is the downgrade check: without it a proof from a weaker circuit variant would pass on the strength of being a valid proof of something. Then `bb verify` must succeed over the verification key, the proof bytes and the serialised public inputs, else `ProofRejected`; verification is delegated to Barretenberg rather than reimplemented in Rust. Then `public_inputs[domain_index]` must equal `policy.domain`, else `WrongDomain`, since a bundle whose proofs carry different domains is several documents wearing one identity. Then `public_inputs[context_index]` must equal `policy.context`, else `WrongContext`. Document proofs, `Circuit::Sod` or `Circuit::Registration`, are collected as they are seen.
 3. Exactly one document proof, of either kind. Zero gives `NoSecurityObjectProof`, two or more give `MoreThanOneSecurityObjectProof`.
-4. Leaf form, when the document proof is a `Sod` proof. For every `DgExtract` proof, `dg_extract_econtent_binding()` (index 1) equals the Security Object proof's `sod_econtent_binding()` (index 2), else `UnlinkedDataGroup`; the `dg_number` values become `Statement::DataGroup` entries and the `dg_extract_dg_binding()` values (index 4) are collected. For every `Attributes` proof, `attributes_dg_binding()` (index 0) is one of those bindings, else `UnlinkedDataGroup`; its date passes the window check of step 6 and the `attributes_commitment()` values (index 4) are collected. For every anchor proof of either mode, `anchor_dsc_commitment()` equals the Security Object proof's `sod_dsc_commitment()` (index 3), else `AnchorForAnotherSigner`; a chain anchor's date passes the window check; if `policy.registry_root` is set the anchor's first public input must equal it, else `AnchorAgainstAnotherRegistry`; and if `policy.require_trust_anchor` is set and no anchor proof was seen, `NoTrustAnchorProof`.
-5. Aggregate form, when the document proof is a `Registration` proof. A `DgExtract`, `Attributes` or anchor proof beside it gives `NotLinkableToRegistration`, because the registration proof exposes none of the values such a proof would have to be checked against. `Statement::DataGroup { number: 1 }` is recorded, since the circuit pins the extraction to DG1. The returned commitment (index 2) is collected, the date (index 4) passes the window check, and the registry root (index 5) must equal `policy.registry_root` when one is fixed, else `AnchorAgainstAnotherRegistry`. A required trust anchor is satisfied by construction.
+4. Leaf form, when the document proof is a `Sod` proof. For every `DgExtract` proof, `dg_extract_econtent_binding()` (index 1) equals the Security Object proof's `sod_econtent_binding()` (index 2), else `UnlinkedDataGroup`; the `dg_number` values become `Statement::DataGroup` entries and the `dg_extract_dg_binding()` values (index 4) are collected. For every `Attributes` proof, `attributes_dg_binding()` (index 0) is one of those bindings, else `UnlinkedDataGroup`; its date passes the window check of step 6 and the `attributes_commitment()` values (index 4) are collected. For every `ChipActive` proof, `chip_dg_binding()` (index 0) is one of the collected data group bindings, else `ChipFromAnotherDocument`, and a `Statement::ChipPresent` is recorded. For every anchor proof of either mode, `anchor_dsc_commitment()` equals the Security Object proof's `sod_dsc_commitment()` (index 3), else `AnchorForAnotherSigner`; a chain anchor's date passes the window check; if `policy.registry_root` is set the anchor's first public input must equal it, else `AnchorAgainstAnotherRegistry`; and if `policy.require_trust_anchor` is set and no anchor proof was seen, `NoTrustAnchorProof`.
+5. Aggregate form, when the document proof is a `Registration` proof. A `DgExtract`, `Attributes`, anchor or `ChipActive` proof beside it gives `NotLinkableToRegistration`, because the registration proof exposes none of the values such a proof would have to be checked against. `Statement::DataGroup { number: 1 }` is recorded, since the circuit pins the extraction to DG1. The returned commitment (index 2) is collected, the date (index 4) passes the window check, and the registry root (index 5) must equal `policy.registry_root` when one is fixed, else `AnchorAgainstAnotherRegistry`. A required trust anchor is satisfied by construction.
 6. Dates. Every date read in steps 4 and 5 must sit inside `policy.date_window` when one is set, else `DateOutsideWindow`, and every date carrying proof in one bundle must have used the same date, else `InconsistentDates`, so a bundle cannot resolve a birth year against one date and certificate validity against another.
 7. One pass over every proof again. For a `Compare`, `Member` or `Reveal` proof, `referenced_commitment()` (index 1) is one of the collected commitments, else `UnlinkedCommitment`; each contributes a `Statement` carrying its `field_id` and its bounds, set root, or revealed elements and length. For a `Nullifier` proof, `referenced_commitment()` (index 0) is one of those commitments, else `UnlinkedCommitment`, and `nullifier_secret_binding()` (index 1) equals the document proof's secret binding, `return[2]` of a `Sod` proof or `return[1]` of a `Registration` proof, else `NullifierFromAnotherDocument`. A second `Nullifier` proof gives `MoreThanOneNullifierProof`. An aggregated `session_compare_member` proof is admitted against its returned commitment at index 7 and contributes a `Compare` and a `Member` statement from its first five public inputs.
 
@@ -216,7 +219,7 @@ On success it returns `Verified { nullifier, dsc_commitment, statements, asserte
 
 For the sessions after a registration, `verify_session(proofs, policy, registered)` runs steps 1, 2 and 7 against a stored commitment and secret binding instead of collected ones. Only question proofs are admitted there; a document proof gives `NotASessionProof`, and trust, dates and anchors play no part because the stored registration already settled them.
 
-Chained together, steps 3 through 6 are the linkage argument for the document data. A signature the issuing state made covers signed attributes; those attributes carry the eContent digest; that digest becomes `econtent_binding`; a data group hash read out of that same eContent becomes `dg_binding`; DG1 hashing to that `dg_binding` becomes `commitment`; a field opened against that `commitment` is what a predicate or the nullifier speaks about. Break any one equality and the proofs are about different documents. Steps 7 and 8 attach the separate question of whose key signed, through `dsc_commitment`.
+Chained together, steps 3 through 7 are the linkage argument for the document data. A signature the issuing state made covers signed attributes; those attributes carry the eContent digest; that digest becomes `econtent_binding`; a data group hash read out of that same eContent becomes `dg_binding`; DG1 hashing to that `dg_binding` becomes `commitment`; a field opened against that `commitment` is what a predicate or the nullifier speaks about, and a chip answer against that same `dg_binding` is what ties the key that answered to this document. Break any one equality and the proofs are about different documents. The anchor clauses of steps 4 and 5 attach the separate question of whose key signed, through `dsc_commitment`.
 
 ## 10. What the verifier does not check
 
@@ -261,6 +264,6 @@ Signer trust in the leaf form is checked only when the policy asks for it. With 
 
 ## Appendix: circuit sizes
 
-Opcode counts are in `architecture.md`, which is the only place they are recorded.
+Opcode counts are recorded in `architecture.md` and re-measured there per revision.
 
 That shape is the reason the chain is split the way it is. The signature check runs once and dominates: the two attribute circuits and the extraction circuit are roughly an order of magnitude smaller, and every predicate, the nullifier and the anchor are two orders of magnitude smaller or more, so asking one more question of a document costs a small fraction of the first proof.

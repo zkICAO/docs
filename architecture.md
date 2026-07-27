@@ -7,10 +7,10 @@ This describes the circuit set as it exists in code, not a design that is planne
 | Repository | Revision | Contents |
 |---|---|---|
 | zkICAO/circuits | the revision this document sits beside | 18 library packages, 23 circuits, 8 witness tools |
-| zkICAO/prover | `0c7e2f0` | the off-chain verifier, `verify_bundle` |
+| zkICAO/prover | the head this document was checked against | the off-chain verifier, `verify_bundle` |
 | toolchain | nargo 1.0.0-beta.19 | pinned in `TOOLCHAIN.md` |
 
-`5257a48`, which added the chain walking registration variant, is the last commit that changed a circuit. The on chain half lives in a fifth repository, zkICAO/contracts, described in section 6.2. The repository is under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
+The on chain half lives in a fifth repository, zkICAO/contracts, described in section 6.2. The repositories are under active development and the set grows faster than a document can track. Check the revision before relying on the inventory here. What is stable is the shape: the linkage between circuits, the derived value formats, and the verification procedure.
 
 Where something is absent, this document says so rather than describing an intention. The section "What is not implemented" is not a roadmap, it is the boundary of what a proof from this system means.
 
@@ -51,15 +51,15 @@ The `====` lines are equalities the verifier checks between public values of dif
 
 Two properties come out of this shape. The expensive step runs once per document rather than once per question, which section 3 quantifies. And a verifier that only wants to know whether the holder is over eighteen never receives a birth date, because the date is read inside the attribute circuit, goes into the commitment, and never becomes a public value.
 
-Two scoping values appear in every circuit. `domain` identifies the application and enters every derived value the verifier stores or compares across sessions, with one exception, `dsc_commitment`, which section 4 covers. `context` identifies one session, is asserted non-zero in all eleven circuits, and deliberately enters no derived value, because mixing it in would change stored values every session. Both are public inputs of every circuit.
+Two scoping values appear in every circuit. `domain` identifies the application and enters every derived value the verifier stores or compares across sessions, with one exception, `dsc_commitment`, which section 4 covers. `context` identifies one session, is asserted non-zero in every circuit, and deliberately enters no derived value, because mixing it in would change stored values every session. Both are public inputs of every circuit.
 
 ## 2. The circuits
 
 Public inputs are listed in Barretenberg layout order, which is the public parameters in declaration order followed by the return values. That order is recorded in `prover/layout.manifest`, generated from the compiled ABIs and checked by the prover tests.
 
-### 2.1 Passive Authentication: sod_ecdsa_p256_sha256_ec512 and sod_rsa2048_v15_sha256_ec512
+### 2.1 Passive Authentication: the sod family
 
-Packages `bin/sod/ecdsa_p256_sha256_ec512` and `bin/sod/rsa2048_v15_sha256_ec512`, over `lib/emrtd/sod`, `lib/emrtd/cms`, `lib/core/hash`, `lib/core/commit`, plus `lib/core/sig` or `lib/core/rsa` for the signature step. `lib/emrtd/sod` is generic over the buffer sizes and splits the shared linking (`link`) from the signature check, so a variant supplies only its own algorithm.
+Eight packages under `bin/sod/`, over `lib/emrtd/sod`, `lib/emrtd/cms`, `lib/core/hash`, `lib/core/commit`, plus `lib/core/sig` or `lib/core/rsa` for the signature step. `lib/emrtd/sod` is generic over the buffer sizes and splits the shared linking (`link`) from the signature check, so a variant supplies only its own algorithm. The two walked through here, `ecdsa_p256_sha256_ec512` and `rsa2048_v15_sha256_ec512`, stand for the family; the P-384, Brainpool P-384r1, RSA-3072, RSA-4096 and 1024 byte buffer variants differ only in the curve, the modulus width or the buffer, per the variant table in section 5.
 
 Both variants take `econtent [u8; 512]`, `econtent_len u32`, `signed_attrs [u8; 256]`, `signed_attrs_len u32`, `digest_offset u32` and `dsc_salt Field` privately, and differ only in the key and signature witnesses. The curve variant takes `pubkey_x [u8; 32]`, `pubkey_y [u8; 32]`, `signature_r [u8; 32]`, `signature_s [u8; 32]`. The RSA variant takes `modulus_limbs [u128; 18]`, `redc_limbs [u128; 18]` and `signature_limbs [u128; 18]`.
 
@@ -95,9 +95,9 @@ It re-hashes the Security Object, derives `econtent_binding` the same way the Pa
 
 What it does not prove is documented in the header of `lib/emrtd/lds` and is worth repeating. `dg_entry_sha256` checks the header bytes sitting at the offset it is given and nothing about how that offset was reached. It does not walk the Security Object from its start, so it cannot distinguish a genuine entry from any other byte sequence in the buffer with the same seven header bytes. Both offsets are private and independent, so nothing ties the algorithm identifier at `oid_offset` to the entry at `dg_offset`. The argument that this is still safe is that every byte read lies inside a buffer whose hash matches the authenticated `econtent_binding`, so a prover who finds a matching pattern only obtains data the issuer signed. A circuit that needs a stronger guarantee has to establish the offset itself, and none does.
 
-### 2.3 attributes_mrz_td3_sha256 and attributes_mrz_td1_sha256
+### 2.3 The attribute profiles: mrz_td3_sha256, mrz_td2_sha256 and mrz_td1_sha256
 
-Packages `bin/attributes/mrz_td3_sha256` and `bin/attributes/mrz_td1_sha256`, over `lib/emrtd/attributes`, `lib/emrtd/mrz`, `lib/core/normalize`, `lib/core/hash`, `lib/core/commit`. TD3 is the passport layout, two lines of 44 characters. TD1 is the card layout, three lines of 30.
+Packages `bin/attributes/mrz_td3_sha256`, `bin/attributes/mrz_td2_sha256` and `bin/attributes/mrz_td1_sha256`, over `lib/emrtd/attributes`, `lib/emrtd/mrz`, `lib/core/normalize`, `lib/core/hash`, `lib/core/commit`. TD3 is the passport layout, two lines of 44 characters. TD2 is the smaller official travel document, two lines of 36. TD1 is the card layout, three lines of 30. All three commit the same nine field identifiers, so a predicate written against one works against all.
 
 Private: `dg1 [u8; 128]`, `dg1_len u32`, `session_salt Field`.
 
@@ -155,7 +155,17 @@ What neither mode proves. Neither checks revocation. Neither checks issuer or su
 
 One pairing limit follows from the types. `x509::ec_public_key` is generic over the coordinate width and the chain anchor instantiates it at 32 bytes, so that mode reads an uncompressed elliptic curve point out of the certificate and commits to it through `pubkey_hash`. The RSA Passive Authentication variant derives its key hash with `modulus_hash` instead, and nothing in the chain mode can read an RSA subject key out of a certificate. There is therefore no combination today that chains an RSA Document Signer key to a country signing key, even though both halves exist. The inclusion mode carries the matching gap: it takes two 32 byte coordinate arrays, so a registry of RSA signer keys has no circuit to consume it, and `modulus_hash` is what such a registry would build leaves from.
 
-### 2.7 registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion
+### 2.7 chip_active_p256_sha256
+
+Package `bin/chip/active_p256_sha256`, over `lib/emrtd/chip`, `lib/core/x509`, `lib/core/sig`, `lib/core/hash`, `lib/core/commit`. Doc 9303 Part 11 Active Authentication: the chip holds a key pair whose public half sits in DG15 and whose private half never leaves it, so a signature over a fresh challenge is the one statement a copy of the document's data cannot make.
+
+Private: `dg15 [u8; 128]`, `dg15_len u32`, `key_offset u32`, `challenge [u8; 8]`, `signature_r [u8; 32]`, `signature_s [u8; 32]`. Public: `dg_binding`, `domain`, `context`. Three field elements.
+
+The circuit hashes DG15 and requires the binding the extraction proof published, so the key that answered is the key the Security Object commits to; reads the public key out of the signed data group through `x509::ec_public_key` rather than taking it as an input; requires the challenge to equal the first eight bytes of SHA-256 over the context's 32 byte big endian form, the derivation the terminal also uses, so an answer kept from another session fails; and verifies the chip's ECDSA P-256 signature over SHA-256 of the challenge. The challenge is eight bytes because INTERNAL AUTHENTICATE takes exactly eight, so a wider one could never be signed by real hardware.
+
+It attaches to a bundle the way an attribute proof does, through `dg_binding`, and the off chain verifier reports it as `Statement::ChipPresent` after checking that attachment. It travels only beside a Passive Authentication proof: the registration aggregate does not expose a data group binding, so the checklist rejects a chip proof beside one. What it cannot rule out is a relay to a genuine chip elsewhere, which is a distance bound and a property of the reader's radio, not of any proof.
+
+### 2.8 registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion
 
 Package `bin/registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion`, over the `bb_proof_verification` library from the Barretenberg tree, pinned in `TOOLCHAIN.md`.
 
@@ -175,7 +185,7 @@ Measured at this revision, on the author's machine: one recursive verification p
 
 A second variant, `registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain`, puts `anchor_csca_chain_rsa2048_sha256_tbs512` in the anchor slot: the country signing key certified the signer, checked in circuit rather than assumed of a curated registry. One sharing does the work the off chain date rule does. The chain anchor validates the certificate at a date and the attribute circuit resolves two digit years at a date, and here they are the same witness placed into both public input arrays, so resolving a birth year against one day and certificate validity against another cannot prove. The master list root is exposed where the registry root is, the six field layout is identical, and a verifier tells the variants apart by verification key alone.
 
-### 2.8 session_compare_member
+### 2.9 session_compare_member
 
 Package `bin/session/compare_member`, over the same recursion library. The rule it implements: a session that asks one question presents the bare predicate, and a session that asks more than one aggregates them, because a second proof in a bundle costs a verification and an aggregated pair costs one.
 
@@ -183,9 +193,9 @@ Private: the verification key and proof of one `predicate_compare` and one `pred
 
 The commitment, the domain and the context are single witnesses placed into both inner public input arrays, so the two predicates cannot be about different documents, applications or sessions and still prove. The statement values stay public: a verifier reads them off this proof exactly as off the bare predicates, and the returned commitment links against a registration the way a predicate's referenced commitment does. Nine ACIR opcodes; the inner verification key hashes come from the same generated `keys.nr` arrangement.
 
-### 2.9 The witness tools
+### 2.10 The witness tools
 
-Six packages under `tools/`, executed to solve a witness and never proved. They sit outside `bin/` so they are not mistaken for circuits, and they exist for one reason: every value they produce is a Poseidon2 hash a circuit recomputes, so deriving them anywhere else would be a second implementation of the same hashing, and a divergence between the two would surface as an inclusion proof that fails for a key that really is in the set.
+Eight packages under `tools/`, executed to solve a witness and never proved. They sit outside `bin/` so they are not mistaken for circuits, and they exist for one reason: every value they produce is a Poseidon2 hash a circuit recomputes, so deriving them anywhere else would be a second implementation of the same hashing, and a divergence between the two would surface as an inclusion proof that fails for a key that really is in the set.
 
 `tools/mrz_opening` returns the value, blinding factor and Merkle path a predicate needs for one field, from the same derivation the attribute circuit runs. Proving it would publish exactly what the commitment exists to hide.
 
@@ -195,31 +205,37 @@ Six packages under `tools/`, executed to solve a witness and never proved. They 
 
 `tools/merkle_path` assembles a tree over up to sixteen leaves and returns its root with the sibling path for one of them, at any depth from four to sixteen, so one tool serves the signer registry at depth sixteen, the master list at depth ten and a membership set at depth eight. Levels above the leaves are padded with the empty subtree convention of section 4, which is what makes a tree of four entries and a tree of sixteen the same construction. It is tested at every index at each of the three depths, forty eight paths, against the same `walk_path` the circuits use.
 
+`tools/dg_binding_witness` derives the binding of one data group, which a witness for the chip circuit needs, from the same library the circuits recompute it with.
+
+`tools/hash_vectors` prints the Poseidon2 values the Groth16 stack's circom implementation has to reproduce, at every sponge width the protocol uses; the cross stack agreement check in `groth16/test` consumes them.
+
 ## 3. Why the signature check and the extraction are separate circuits
 
 They are separate because a document normally needs more than one data group, and folding the extraction into the signature circuit would repeat the signature check for each one. The signature check dominates the cost of a proof.
 
-Measured with `nargo info` under the pinned compiler. Every figure below was reproduced at this revision, and each also appears in the commit that introduced the circuit: `60f7fef` for the first eight, `613231b` for `anchor_dsc_inclusion`, `ae0a9c8` for the RSA variant, `6244f20` for the chain anchor.
+Measured with `nargo info` under the pinned compiler. Every figure below reproduces at the revision this document sits beside; a change to any circuit re-measures its row.
 
 | Circuit | ACIR opcodes |
 |---|---|
 | sod_ecdsa_p384_sha256_ec512 | 65850 |
+| sod_ecdsa_brainpool384r1_sha256_ec512 | 65850 |
 | sod_ecdsa_p256_sha256_ec1024 | 38034 |
 | sod_ecdsa_p256_sha256_ec512 | 35098 |
+| chip_active_p256_sha256 | 31262 |
 | sod_rsa4096_v15_sha256_ec512 | 11093 |
 | sod_rsa2048_v15_sha256_ec1024 | 11036 |
+| sod_rsa3072_v15_sha256_ec512 | 9516 |
 | sod_rsa2048_v15_sha256_ec512 | 8100 |
 | anchor_csca_chain_rsa2048_sha256_tbs512 | 6841 |
 | dg_extract_sha256_ec1024 | 6237 |
 | dg_extract_sha256_ec512 | 3301 |
 | attributes_mrz_td1_sha256 | 2449 |
-| attributes_mrz_td2_sha256 | 1773 |
 | attributes_mrz_td3_sha256 | 2103 |
+| attributes_mrz_td2_sha256 | 1773 |
 | anchor_dsc_inclusion | 340 |
 | predicate_member | 230 |
 | predicate_compare | 123 |
 | predicate_reveal | 100 |
-| chip_active_p256_sha256 | 31262 |
 | nullifier_document_number | 58 |
 | registration_mrz_td3_ecdsa_p256_sha256_ec512_inclusion | 17 |
 | registration_mrz_td3_ecdsa_p256_sha256_ec512_csca_chain | 17 |
@@ -227,13 +243,13 @@ Measured with `nargo info` under the pinned compiler. Every figure below was rep
 
 Commit `8bfd6d1` recorded the same pair one change earlier, at the same 512 byte buffer: 35080 for the signature circuit and 3297 for the extraction. The extraction circuit re-hashes the same 512 byte buffer, which is what re-deriving `econtent_binding` costs instead of verifying the signature again.
 
-The registration circuit is a special case in this table: its 17 opcodes are almost entirely the four recursive verification intrinsics, whose cost lives in the backend rather than in ACIR, so its economics are the proving times in section 2.7 and not this count.
+The registration circuit is a special case in this table: its 17 opcodes are almost entirely the four recursive verification intrinsics, whose cost lives in the backend rather than in ACIR, so its economics are the proving times in section 2.8 and not this count.
 
-The ratio is the argument. Against the extraction circuit, Passive Authentication costs about two and a half times as much in the RSA variant and about eleven times as much in the curve variant. Against the four circuits a verifier uses to ask a question, the curve variant costs between 154 and 627 times as much, and the RSA variant between 38 and 156 times. Asking one more question of a document that has already been authenticated costs between 56 and 228 opcodes.
+The ratio is the argument. Against the extraction circuit, Passive Authentication costs about two and a half times as much in the RSA-2048 variant and about eleven times as much in the P-256 variant. Against the four circuits a verifier uses to ask a question, the P-256 variant costs between 152 and 605 times as much, and the RSA-2048 variant between 35 and 140 times. Asking one more question of a document that has already been authenticated costs between 58 and 230 opcodes.
 
 The Passive Authentication figures are worth reading against each other. RSA is four times cheaper than ECDSA here, which inverts the usual expectation: verifying RSA with a small exponent is seventeen modular multiplications, while an ECDSA verification is two scalar multiplications over a curve whose field is not the proving field, so it pays for non native arithmetic throughout.
 
-The wider variants show how each grows. Doubling the RSA modulus costs about thirty seven percent, 8100 to 11093, because the work scales with the limb count rather than the exponent. Moving from P-256 to P-384 nearly doubles the cost, 35098 to 65850, because a wider field pays more non native arithmetic at every step. RSA-4096 remains six times cheaper than P-256.
+The wider variants show how each grows. Doubling the RSA modulus costs about thirty seven percent, 8100 to 11093, because the work scales with the limb count rather than the exponent. Moving from P-256 to P-384 nearly doubles the cost, 35098 to 65850, because a wider field pays more non native arithmetic at every step, and Brainpool P-384r1 lands on exactly the same count as P-384, so the cost is a property of the field width and not of the curve chosen over it. RSA-4096 remains about three times cheaper than P-256 and nearly six times cheaper than either 384 bit curve.
 
 Commit `c9a27c9` recorded end to end numbers for the Passive Authentication circuit on the author's machine, at a time when that circuit had four public inputs rather than the five it has now: proving 1.9 seconds, proof 16000 bytes, public inputs 128 bytes for four field elements, verification key 3680 bytes. Those figures come from one machine and one revision and should be re-measured before being relied on.
 
@@ -281,17 +297,22 @@ Variants that exist today:
 
 | Package | Notes |
 |---|---|
-| `sod/ecdsa_p256_sha256_ec512` | ECDSA over P-256 |
-| `sod/rsa2048_v15_sha256_ec512` | RSA-2048, PKCS#1 v1.5, exponent 65537 only |
-| `dg_extract/sha256_ec512` | the only extraction variant |
+| `sod/ecdsa_p256_sha256_ec512`, `sod/ecdsa_p256_sha256_ec1024` | ECDSA over P-256, two Security Object buffer sizes |
+| `sod/ecdsa_p384_sha256_ec512`, `sod/ecdsa_brainpool384r1_sha256_ec512` | the two 384 bit curves Doc 9303 permits |
+| `sod/rsa2048_v15_sha256_ec512`, `sod/rsa2048_v15_sha256_ec1024` | RSA-2048, PKCS#1 v1.5, exponent 65537 only |
+| `sod/rsa3072_v15_sha256_ec512`, `sod/rsa4096_v15_sha256_ec512` | the wider RSA moduli |
+| `dg_extract/sha256_ec512`, `dg_extract/sha256_ec1024` | two Security Object buffer sizes |
 | `attributes/mrz_td3_sha256` | passport layout |
+| `attributes/mrz_td2_sha256` | the other card sized layout |
 | `attributes/mrz_td1_sha256` | card layout |
 | `predicate/compare`, `predicate/member`, `predicate/reveal` | no variants |
 | `nullifier/document_number` | one policy |
 | `anchor/dsc_inclusion` | published set of signer keys, depth sixteen |
 | `anchor/csca_chain_rsa2048_sha256_tbs512` | RSA-2048 authority, master list depth ten |
+| `chip/active_p256_sha256` | Active Authentication, elliptic curve chips |
 | `registration/mrz_td3_ecdsa_p256_sha256_ec512_inclusion` | one inner variant set, pinned by verification key hash |
 | `registration/mrz_td3_ecdsa_p256_sha256_ec512_csca_chain` | the same set with the chain anchor, date tied to the attributes |
+| `session/compare_member` | two predicates aggregated recursively |
 | `session/compare_member` | two predicates of a session as one proof |
 
 Not every fixed size is in a name. The Passive Authentication circuit fixes `signed_attrs` at 256 bytes and the attribute circuits fix the DG1 buffer at 128 bytes; neither appears in the package name. The membership tree depth of eight, the signer registry depth of sixteen and the master list depth of ten are likewise fixed in the circuit and absent from the name. Depth is part of what a root means: the same leaves published at two depths produce two roots, which `tools/merkle_path` has a test for. If a second size of either is ever needed, the naming scheme has to grow before the package does.
@@ -336,9 +357,15 @@ A second entry point covers the sessions after a registration. `verify_session(p
 
 The second model verifies on a chain, and it exists in the zkICAO/contracts repository. `ZkIcaoRegistry` is the aggregate bundle form of section 6.1 as a contract: a holder registers with a registration proof and a nullifier proof, both re proved with bb's keccak oracle so the transcript is EVM friendly, and the contract holds the two to each other and to its own policy, its application domain, its signer registry root and its proving date window, then verifies both with Solidity verifiers generated by `bb write_solidity_verifier` and stores the nullifier. A second registration of the same document reverts. The context is the sender address, so a proof is bound to the transaction sender at proving time and reverts in anyone else's transaction.
 
-Measured with forge over real proofs: `register()` costs 6,518,172 gas for the two verifications and storage; the keccak flavored registration proof is 11,072 bytes and the nullifier proof 7,616. Every rejection path is tested against real proofs: a duplicate document, another sender, a tampered proof of either kind, a nullifier from another document, another registry, a date outside the window.
+Measured over real proofs: a `register()` transaction on a devnet costs 5,520,416 gas with intrinsics and calldata included, of which the metered execution is 5,212,756 and the registry's own logic 52,813; the keccak flavored registration proof is 11,072 bytes and the nullifier proof 7,616. Every rejection path is tested against real proofs: a duplicate document, another sender, a tampered proof of either kind, a nullifier from another document, another registry, a date outside the window.
 
-What does not exist on this path: any deployment, any audit, and on chain session questions, which today are an off chain matter against the registered commitment.
+`script/devnet.sh` runs this path against a node the way a deployment would, deploying with the real deploy script and registering with a real transaction; pointed at a devnet by default, it runs unchanged against a testnet given a funded key. What does not exist on this path: any public network deployment, any audit, and on chain session questions, which today are an off chain matter against the registered commitment.
+
+### 6.3 The second proving stack
+
+The predicate layer exists a second time under `circuits/groth16`, in circom, proved with rapidsnark through the Rust witness generator in `groth16/prover`, and verified by a Groth16 contract snarkjs exports. It exists for one reason the numbers in the contracts repository state: a Groth16 verification is a fixed pairing check, roughly eleven times cheaper on chain than an UltraHonk verification and fourteen times smaller as a contract, and the price is a per circuit phase 2 ceremony that UltraHonk does not need.
+
+The load bearing property is that both stacks compute the same Poseidon2, and it is tested rather than assumed: `tools/hash_vectors` prints the values from the Noir side, `groth16/test/check.sh` recomputes them in circom at every sponge width the protocol uses, and then opens a real commitment the Noir circuits produced inside the circom predicate, with adversarial variants refused. The backend property of section 2.8 holds identically here: rapidsnark proves an unsatisfied witness without complaint, a committed forged fixture demonstrates it, and verification is the only check. The proving key committed for tests came from a local development ceremony and is fit for nothing else; the pins for circom, snarkjs and circom-witnesscalc are in `TOOLCHAIN.md`.
 
 ## 7. What is not implemented
 
@@ -346,23 +373,23 @@ Signature algorithms. Six variants exist: ECDSA over P-256, P-384 and Brainpool 
 
 Digest algorithms. `lib/core/hash` exposes SHA-256 and nothing else, so a document whose CMS digest or data group hashes use SHA-384 or SHA-512, both of which Doc 9303 permits, is out of reach. The obstacle is a dependency rather than the design: `noir-lang/sha512` exists but publishes no tags, and every other dependency here is pinned by tag, so taking it would mean pinning to a moving branch or to a bare commit in a repository whose release discipline is not yet established. A wider digest also changes the Security Object entry width, from 39 bytes to 71, which moves the buffer boundary the variant names encode.
 
-Document layouts. All three Doc 9303 layouts are implemented, TD1, TD2 and TD3, each with a profile committing the same nine field identifiers and a circuit. No profile exists for any data group other than DG1, so nothing reads a portrait, a state specific group such as DG13, or anything else, even though the extraction circuit will extract any data group number from 1 to 16.
+Document layouts. All three Doc 9303 layouts are implemented, TD1, TD2 and TD3, each with a profile committing the same nine field identifiers and a circuit. Beyond DG1, the only data group any circuit reads into is DG15, whose public key the chip circuit extracts; no profile parses a portrait, a state specific group such as DG13, or anything else, even though the extraction circuit will extract any data group number from 1 to 16.
 
 Trust. The chain mode verifies one link, an RSA-2048 country signing signature over an elliptic curve Document Signer certificate. It does not walk further, does not check revocation, does not read names or extensions, and cannot certify an RSA Document Signer key, so the RSA Passive Authentication variant has no chain anchor to pair with. Beyond that link the list of country signing keys is trusted input, which is unavoidable and is what a master list is.
 
-Chip presence, partly. `bin/chip/active_p256_sha256` proves Active Authentication for a chip whose key is an elliptic curve one: the chip signs a challenge with the private key behind DG15, which a copy of the data cannot do because it does not have that key. The challenge is the session context, so an answer kept from an earlier exchange fails. Chip Authentication, the Diffie Hellman variant of Part 11, is not implemented, and neither is Active Authentication for RSA keys, which use ISO 9796-2 with SHA-1 and would need a digest this repository does not carry. A relay, a terminal forwarding a challenge to a genuine chip elsewhere, is ruled out by nothing here and cannot be: that is a distance bound and a property of the reader's radio.
+Chip presence, partly. `bin/chip/active_p256_sha256` proves Active Authentication for a chip whose key is an elliptic curve one: the chip signs a challenge with the private key behind DG15, which a copy of the data cannot do because it does not have that key. The challenge is eight bytes, the width the chip's INTERNAL AUTHENTICATE command takes, and the circuit requires it to equal the first eight bytes of SHA-256 over the session context's 32 byte big endian form, the same derivation the terminal uses to issue it, so an answer kept from an earlier exchange fails. Chip Authentication, the Diffie Hellman variant of Part 11, is not implemented, and neither is Active Authentication for RSA keys, which use ISO 9796-2 with SHA-1 and would need a digest this repository does not carry. A relay, a terminal forwarding a challenge to a genuine chip elsewhere, is ruled out by nothing here and cannot be: that is a distance bound and a property of the reader's radio.
 
 Without a chip proof, every other statement is over data a holder supplies, so a copy produces proofs indistinguishable from the original. That is a property of Passive Authentication and the system inherits it.
 
 On-chain deployment. The reference registry, its verifiers and its tests exist and pass, section 6.2; no network has them, and no audit has looked at them. Session questions on chain do not exist. Predicate aggregation covers the compare and member pair; other compositions are added as they are needed.
 
-Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/emrtd/lds`, `lib/emrtd/cms`, `lib/emrtd/attributes` and `lib/core/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. Witness preparation does not exist as code: `lib/core/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove. The noir_rs pin in `TOOLCHAIN.md` is recorded as intended and is not exercised; the Barretenberg pin is exercised, by the bundle command that proves and verifies every circuit and by the keys subcommand that writes the pinned verification key hashes.
+Supporting code. The structure checks that ship are fixed offset byte comparisons in `lib/emrtd/lds`, `lib/emrtd/cms`, `lib/emrtd/attributes` and `lib/core/x509`. A general DER decoder existed in `lib/tlv` with no package depending on it and was removed; a certificate parser that walks a structure would need one written for that job. Witness preparation does not exist as code: `lib/core/sig` documents that a caller has to normalize `s` to `n - s` when it exceeds `n/2`, and the only implementation of that rule is `ec::normalize_s` in the Rust fixture generator that builds synthetic documents. The prover crate verifies and does not prove. The Barretenberg pin is exercised by the bundle command, which proves and verifies one instantiation of every circuit phase in chain order, and by the keys subcommand that writes the pinned verification key hashes; variants the bundle does not walk are covered by their own tests.
 
 Real trust material, and deliberately so. The trees the bundle builds are real trees over real keys, but the keys are generated here. Obtaining certificates from the Public Key Directory, deciding which to accept and publishing a root are the relying party's, not this project's: doing them here would make zkICAO a service with an operator and a party to trust, rather than the format, the tools and the circuits. `registry.md` sets out what a relying party does and which tools build the tree. What is genuinely missing on this path is a general X.509 parser, since `lib/core/x509` reads fields at offsets it is given for use inside a circuit and is not one.
 
 Real documents. Every fixture in `lib/testdata` is generated by `fixtures/generator`, which builds synthetic Doc 9303 material over the specimen machine readable zones from the standard: DG1, a Security Object, CMS signed attributes, a signature under a generated Document Signer key, and a Document Signer certificate signed by a generated country signing key. No test in either repository runs against a document issued by a state.
 
-The repository was bootstrapped on 2026-07-23 and the pinned revision is from 2026-07-26, so the whole set above is three days of work and is still growing. Three gaps this document originally listed as absent, RSA Passive Authentication, country signing certificate verification and recursive aggregation, were filled while it was being maintained. Re-read the inventory against the revision you are auditing.
+The repository was bootstrapped on 2026-07-23, so the whole set above is a few days of work and is still growing. Four gaps this document originally listed as absent, RSA Passive Authentication, country signing certificate verification, recursive aggregation and chip presence, were filled while it was being maintained. Re-read the inventory against the revision you are auditing.
 
 ## 8. Obligations on the prover
 
@@ -384,11 +411,11 @@ Compute `document_secret` from the same normalized signature the Passive Authent
 
 ## 9. State of the test suite
 
-Re-run at this revision: `nargo test` reports 122 tests passing across the 40 workspace packages, and `cargo test` in `fixtures/generator` reports 31. The prover crate has 21 unit tests, one documentation test, and 25 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms, the session entry point and the aggregated session. The contracts repository runs 8 forge tests over the same real proofs, including the measured registration. The recursive circuits have no `#[test]`, because recursion cannot be exercised without the backend; their coverage is the bundle command, which proves and verifies every one of them, and the adversarial witnesses recorded in commit `b43d83b`.
+Re-run at this revision: `nargo test` reports 145 tests passing across the 49 workspace packages, and `cargo test` in `fixtures/generator` reports 39. The prover crate has 21 unit tests, one documentation test, and 27 integration tests in `tests/bundle.rs` that run the checklist over real proofs when `ZKICAO_BUNDLE` points at a bundle the circuits produced, covering both bundle forms, the session entry point and the aggregated session. The contracts repository runs 15 forge tests over the same real proofs, including the measured registration and the Groth16 comparison. The recursive circuits have no `#[test]`, because recursion cannot be exercised without the backend; their coverage is the bundle command, which proves and verifies them over real inner proofs, and the adversarial witnesses recorded in commit `b43d83b`.
 
-The circuit tests cover both layouts end to end and rejections for a swapped signature, swapped signed attributes, a signature over another Security Object with the digest link repaired, a Security Object that was not the authenticated one, an entry read as the wrong data group, a card layout read as a passport, an opening from another document, a field claimed under another identifier, a value outside a published set, a disclosure that does not match, a secret the prover invented, openings supplied in the wrong order, a signer outside the published set, a tampered certificate, an expired certificate, an authority outside the published list, and an unset session context. That last case is tested in four circuits of the eleven, `attributes_mrz_td3_sha256`, `predicate_compare`, `anchor_dsc_inclusion` and `anchor_csca_chain_rsa2048_sha256_tbs512`, although all eleven contain the assertion.
+The circuit tests cover all three layouts end to end and rejections for a swapped signature, swapped signed attributes, a signature over another Security Object with the digest link repaired, a Security Object that was not the authenticated one, an entry read as the wrong data group, a card layout read as a passport, an opening from another document, a field claimed under another identifier, a value outside a published set, a disclosure that does not match, a secret the prover invented, openings supplied in the wrong order, a signer outside the published set, a tampered certificate, an expired certificate, an authority outside the published list, a chip answer to another session's challenge, and an unset session context. Every binary contains the scoping assertions; five of the twenty three also carry the explicit unset context test.
 
-CI in the circuits repository runs `nargo fmt --check`, `nargo compile` and `nargo test` on the pinned compiler. CI in the prover repository runs `cargo build --all-targets`, `cargo fmt --check` and `cargo test`.
+CI in the circuits repository runs `nargo fmt --check`, `nargo compile` and `nargo test` on the pinned compiler, executes the whole chain with the fixture generator, regenerates the layout manifest, checks the pinned verification key hashes against freshly computed ones, and runs the generator's own tests and lints; a second job builds the Groth16 stack and runs the cross stack agreement check. CI in the prover repository runs `cargo build --all-targets`, `cargo fmt --check` and `cargo test`.
 
 ## 10. Fixed by the protocol, chosen by the application, kept by the holder
 

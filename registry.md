@@ -56,7 +56,7 @@ A verifier checks the following per session. `verify_bundle` in `prover/src/veri
 4. Both proofs carry the same `domain` and the same `context`, and the `context` is the value the verifier issued for this session. Both circuits reject a zero `context` in circuit, with `sod: context must be set` and `anchor: context must be set`, and the anchor circuit additionally asserts `anchor: domain must be set`. `verify_bundle` rejects a zero context at the policy level and compares both values across every proof in the bundle.
 5. The registry root in the anchor proof is a root the verifier published and has not retired. `Policy::require_anchor(registry_root)` sets both the requirement and the root, and a mismatch is `AnchorAgainstAnotherRegistry`. Note that the root is compared only when the policy names one: a `Policy` with `require_trust_anchor` set by hand and `registry_root` left `None` accepts an anchor proof against any root and merely reports which.
 
-The salt rule is stated in the library and enforced nowhere. The comment above `dsc_commitment` in `lib/core/commit` gives the convention: a zero salt is the public registry case where the verifier compares the commitment against a precomputed table, and a random salt is required when an anchor circuit proves trust in zero knowledge. `dsc_commitment` itself does not reject zero, unlike `entropy_seed` ("commit: session salt must be non-zero") and `nullifier` ("commit: nullifier secret must be non-zero"), which both assert a non zero input. Neither Passive Authentication variant constrains `dsc_salt`, and `bin/anchor/dsc_inclusion` does not constrain `salt` either. With a zero or guessable salt an observer computes `dsc_commitment(pubkey_hash(k), 0)` for every published key and learns which signer produced the document, and so the issuing state and the issuing batch. Three things would close this: an assert in the anchor circuit, an assert in the Passive Authentication variants, and witness preparation that draws the salt fresh per session and uses the same value in both witnesses. None of the three exists. The prover repository has no witness preparation at all; its `src` holds `field.rs`, `layout.rs` and `verify.rs`.
+The salt rule is stated in the library and enforced nowhere. The comment above `dsc_commitment` in `lib/core/commit` gives the convention: a zero salt is the public registry case where the verifier compares the commitment against a precomputed table, and a random salt is required when an anchor circuit proves trust in zero knowledge. `dsc_commitment` itself does not reject zero, unlike `entropy_seed` ("commit: session salt must be non-zero") and `nullifier` ("commit: nullifier secret must be non-zero"), which both assert a non zero input. Neither Passive Authentication variant constrains `dsc_salt`, and `bin/anchor/dsc_inclusion` does not constrain `salt` either. With a zero or guessable salt an observer computes `dsc_commitment(pubkey_hash(k), 0)` for every published key and learns which signer produced the document, and so the issuing state and the issuing batch. Three things would close this: an assert in the anchor circuit, an assert in the Passive Authentication variants, and witness preparation that draws the salt fresh per session and uses the same value in both witnesses. None of the three exists. The prover repository has no witness preparation at all; it verifies bundles and nothing else.
 
 ## What the shipped inclusion circuit does
 
@@ -77,7 +77,7 @@ The registry is a full binary Merkle tree over Poseidon2, walked by `commit::wal
 | Slot | Content |
 |---|---|
 | 0 | `commit::pubkey_hash` over the signer public key coordinates |
-| 1 | the three letter issuing state code, packed by `normalize::pack_alpha3` |
+| 1 | the three letter issuing state code, packed the way `normalize::pack_to_4` packs it for the attribute circuits |
 | 2 | certificate validity start, as a YYYYMMDD integer |
 | 3 | certificate validity end, as a YYYYMMDD integer |
 
@@ -119,29 +119,21 @@ Validity dates are not in the shipped leaf, so nothing in the circuit checks the
 
 What it assumes is the whole point of the mode: whoever built the tree verified each Document Signer Certificate against its CSCA, checked validity, and applied whatever revocation data the state publishes. The circuit proves membership in a list. It proves nothing about whether the list is correct, and the list builder is a trusted party that belongs in the threat model by name. The library's own header says the same.
 
-The inclusion circuit walks a Merkle path and checks no signature, which is why it is one of the cheapest circuits in the repository. Opcode counts are in `architecture.md`, which is the only place they are recorded.
+The inclusion circuit walks a Merkle path and checks no signature, which is why it is one of the cheapest circuits in the repository; its count is recorded in `architecture.md`.
 
 ## Mode two: in circuit CSCA verification
 
-`anchor/csca-chain` appears in the intended pipeline in `circuits/README.md`. No circuit package exists for it, so there is no verification key, no public input layout in `prover/layout.manifest`, and no measurement.
+`bin/anchor/csca_chain_rsa2048_sha256_tbs512` implements this mode. It takes the DSC tbsCertificate bytes, hashes them, verifies the CSCA's RSA-2048 PKCS#1 v1.5 signature over that hash, checks the certificate is valid on the supplied date through `x509::assert_valid_at`, requires the CSCA key to sit in the published master list by Merkle path over `commit::modulus_hash`, reads the Document Signer key out of the signed certificate through `x509::ec_public_key`, and returns `dsc_commitment` over that key and the salt. Its public input layout is in `prover/layout.manifest` and its verification key hash is pinned by the chain walking registration circuit.
 
-It would take the DSC tbsCertificate bytes, hash them, verify the CSCA signature over that hash under a CSCA public key, locate the subjectPublicKeyInfo inside the tbsCertificate, read the Document Signer key out under constraint, and return `dsc_commitment` over that key and the session salt.
+This does not remove the trusted list. The CSCA key still has to be anchored against a master list root the verifier publishes. What it does is move the list from the signer level to the country level, where the set is smaller and changes far less often, and it removes the need to trust whoever validated the Document Signer Certificates.
 
-This does not remove the trusted list. The CSCA key still has to be anchored, either by an inclusion proof against a master list root or as a public input naming a single CSCA the verifier accepts. What it does is move the list from the signer level to the country level, where the set is smaller and changes far less often, and it removes the need to trust whoever validated the Document Signer Certificates.
+Two bounds on the shipped instantiation are worth naming.
 
-What already exists that it needs: `rsa::verify_pkcs1_v15_sha256` for a PKCS#1 v1.5 SHA-256 signature, `hash::sha256_bounded` for the certificate hash, `commit::walk_path` for the master list path, and `commit::dsc_commitment` for the output.
+The offsets into the certificate are prover supplied and structurally checked, the same discipline `lds::dg_entry_sha256` applies, and the header of `lib/core/x509` states the argument: a wrong offset fails the structure checks, and no offset can make the circuit read bytes outside the encoding the CSCA signed, so what an offset can select is limited to issuer signed material. The residual assumption is on the issuer: a CSCA that embedded a second uncompressed point pattern inside a certificate would let a prover commit to those bytes as a key, which is a matter for the threat model's issuing state assumptions rather than for the constraint system.
 
-What is missing at the committed state.
+Coverage is one link and one shape. The authority signature is RSA-2048 with SHA-256 and exponent 65537; there is no PSS path, no other digest, no ECDSA authority, and validity times parse as UTCTime only. A certificate longer than 512 bytes needs a wider variant, since hashing is paid per buffer.
 
-Only one RSA shape is implemented. `lib/core/rsa` accepts PKCS#1 v1.5 over SHA-256 and only the exponent 65537, and nothing else; there is no PSS path and no other digest. The function is generic over limb count and modulus bits, but the only instantiation in the repository is `verify_pkcs1_v15_sha256::<18, 2048>` in `bin/sod/rsa2048_v15_sha256_ec512`. Nothing instantiates 4096 bits and nothing measures it.
-
-Certificate parsing is minimal. Nothing in the repository walks a DER structure; a general decoder existed in `lib/tlv`, was used by no package, and was removed. Locating subjectPublicKeyInfo under constraint, rather than trusting a prover supplied offset, needs code that is not committed. The precedent to avoid is in `lib/emrtd/lds`, whose own header says `dg_entry_sha256` checks the header at the offset it is given and nothing about how that offset was reached. The same weakness in a certificate parser is worse: bytes read as a public key from an attacker chosen offset would let a prover substitute a key, and "the signature covers the whole encoding" only narrows the choice to offsets inside issuer signed bytes rather than eliminating it.
-
-Hashing is paid per buffer, not per document. `hash::sha256_bounded` takes a fixed size buffer, and `lib/emrtd/sod` states that a circuit pays for the buffer rather than the actual length. A certificate buffer sized for real Document Signer Certificates is unlikely to fit inside the 512 byte eContent buffer the shipped variants use, and no measurement exists for a circuit that hashes one.
-
-ECDSA signature normalization is not in the prover. The header of `lib/core/sig` states that the ECDSA backend rejects any signature whose s exceeds n/2 and aborts rather than returning false, while RFC 5280 and RFC 5480 place no such restriction, so roughly half of genuine ECDSA signatures need s replaced by n minus s before the witness is built. `fixtures/generator/src/ec.rs` does this with `normalize_s`, applied in `ec::sign_sha256` and covered by tests, which is why the generated fixtures verify at all. The prover repository does not do it, and it is the place the work belongs. The rule is specific to ECDSA; it does not apply to the RSA path.
-
-Test material for the committed state is one sided. The fixture generator produces Document Signer key pairs and signed documents, and no X.509 certificate and no CSCA, so a chain circuit built against the committed fixtures would have nothing to run on.
+Witness preparation obligations are the same as everywhere else: ECDSA `s` normalization for the signatures the fixtures generate is done by `fixtures/generator/src/ec.rs`, and anything preparing witnesses from real certificates carries the same rule. The generator also produces the chain fixtures the tests run on, a certificate over the Document Signer key signed by a generated CSCA.
 
 ## Choosing between the modes
 
@@ -149,13 +141,13 @@ Test material for the committed state is one sided. The fixture generator produc
 |---|---|---|
 | Trusted party | whoever built the signer list | whoever built the country list |
 | Set size | one entry per Document Signer | one entry per CSCA |
-| Circuit work | one key hash, one leaf hash, `D` Poseidon2 pairings | certificate hashing, a public key signature verification, DER parsing, plus an inclusion proof for the CSCA key |
-| Built | yes, `bin/anchor/dsc_inclusion`, P-256 sized coordinates, depth sixteen | no circuit package |
-| Measured | 340 ACIR opcodes at depth sixteen | nothing to measure |
+| Circuit work | one key hash, one leaf hash, `D` Poseidon2 pairings | certificate hashing, an RSA verification, structural certificate reads, plus an inclusion proof for the CSCA key |
+| Built | yes, `bin/anchor/dsc_inclusion`, P-256 sized coordinates, depth sixteen | yes, `bin/anchor/csca_chain_rsa2048_sha256_tbs512`, master list depth ten |
+| Measured | 340 ACIR opcodes at depth sixteen | 6841 ACIR opcodes for RSA-2048 over a 512 byte certificate buffer |
 | Update rate | every signer rotation | every CSCA rotation |
-| Prover inputs | key, salt, path | key, salt, certificate bytes, CSCA key, CSCA signature, path |
+| Prover inputs | key, salt, path | certificate bytes and offsets, CSCA modulus and signature, date, salt, path |
 
-The chain mode is more expensive, and the cost is dominated by the signature and by hashing the certificate buffer. How much more is not known here. The measured comparison the repository does contain points the other way from the usual assumption about RSA: RSA-2048 verification costs roughly a quarter of P-256 verification in these circuits. Opcode counts are in `architecture.md`, which is the only place they are recorded. The chain circuit is now measured at 6841 opcodes for RSA-2048 over a 512 byte certificate buffer. There is still no measurement at 4096 bits, so that cannot be extrapolated from it.
+The chain mode costs about twenty times the inclusion mode, dominated by the signature and by hashing the certificate buffer, and it is still cheaper than any Passive Authentication variant. The comparison points the other way from the usual assumption about RSA: RSA-2048 verification costs roughly a quarter of P-256 verification in these circuits. Opcode counts are recorded in `architecture.md`. No 4096 bit authority is instantiated in the anchor, so that variant has no measurement to extrapolate from.
 
 The default should be inclusion. The chain mode is for deployments that will not accept a list builder as a trusted party and can afford whatever it turns out to cost.
 
